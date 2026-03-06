@@ -143,6 +143,18 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	// Git Provider routes
 	h.registerGitProviderRoutes(api.Group("/git-provider"))
 
+	// Individual git provider routes (frontend-compatible)
+	h.registerGithubRoutes(api.Group("/github"))
+	h.registerGitlabRoutes(api.Group("/gitlab"))
+	h.registerGiteaRoutes(api.Group("/gitea"))
+	h.registerBitbucketRoutes(api.Group("/bitbucket"))
+
+	// Organization routes
+	h.registerOrganizationRoutes(api.Group("/organization"))
+
+	// Preview Deployment routes
+	h.registerPreviewDeploymentRoutes(api.Group("/preview-deployment"))
+
 	// Backup routes
 	h.registerBackupRoutes(api.Group("/backup"))
 

@@ -409,6 +409,63 @@ func (m *Manager) WriteAppConfig(appName string, config *DynamicConfig) error {
 	return WriteConfig(path, config)
 }
 
+// ReadMainConfig reads the main/global Traefik configuration file as raw YAML string.
+func (m *Manager) ReadMainConfig() (string, error) {
+	path := filepath.Join(filepath.Dir(m.dynamicConfigPath), "traefik.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// WriteMainConfig writes the main Traefik configuration file.
+func (m *Manager) WriteMainConfig(content string) error {
+	path := filepath.Join(filepath.Dir(m.dynamicConfigPath), "traefik.yaml")
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// ReadServiceConfig reads a service-specific Traefik dynamic config as raw YAML string.
+func (m *Manager) ReadServiceConfig(serviceName string) (string, error) {
+	path := ConfigFilePath(m.dynamicConfigPath, serviceName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// WriteServiceConfig writes a service-specific Traefik dynamic config from raw YAML string.
+func (m *Manager) WriteServiceConfig(serviceName string, content string) error {
+	path := ConfigFilePath(m.dynamicConfigPath, serviceName)
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// ReadMiddlewareConfig reads the middleware configuration file.
+func (m *Manager) ReadMiddlewareConfig() (string, error) {
+	path := filepath.Join(m.dynamicConfigPath, "middlewares.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// WriteMiddlewareConfig writes the middleware configuration file.
+func (m *Manager) WriteMiddlewareConfig(content string) error {
+	path := filepath.Join(m.dynamicConfigPath, "middlewares.yaml")
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
 // --- internal helpers ---
 
 func (m *Manager) loadOrCreate(path string) (*DynamicConfig, error) {

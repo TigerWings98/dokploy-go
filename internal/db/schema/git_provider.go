@@ -14,8 +14,10 @@ type GitProvider struct {
 	ProviderType   GitProviderType `gorm:"column:providerType;type:text;not null" json:"providerType"`
 	CreatedAt      string          `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	OrganizationID string          `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
+	UserID         string          `gorm:"column:userId;type:text;not null" json:"userId"`
 
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	User         *User         `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	Github       *Github       `gorm:"foreignKey:GitProviderID" json:"github,omitempty"`
 	Gitlab       *Gitlab       `gorm:"foreignKey:GitProviderID" json:"gitlab,omitempty"`
 	Bitbucket    *Bitbucket    `gorm:"foreignKey:GitProviderID" json:"bitbucket,omitempty"`
@@ -61,14 +63,17 @@ func (g *Github) BeforeCreate(tx *gorm.DB) error {
 
 // Gitlab represents the gitlab table.
 type Gitlab struct {
-	GitlabID     string  `gorm:"column:gitlabId;primaryKey;type:text" json:"gitlabId"`
-	ApplicationID *string `gorm:"column:applicationId;type:text" json:"applicationId"`
-	RedirectURI  *string `gorm:"column:redirectUri;type:text" json:"redirectUri"`
-	GroupName    *string `gorm:"column:groupName;type:text" json:"groupName"`
-	AccessToken  *string `gorm:"column:accessToken;type:text" json:"accessToken"`
-	RefreshToken *string `gorm:"column:refreshToken;type:text" json:"refreshToken"`
-	ExpiresAt    *int    `gorm:"column:expiresAt" json:"expiresAt"`
-	GitProviderID string `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
+	GitlabID          string  `gorm:"column:gitlabId;primaryKey;type:text" json:"gitlabId"`
+	GitlabURL         string  `gorm:"column:gitlabUrl;type:text;not null;default:'https://gitlab.com'" json:"gitlabUrl"`
+	GitlabInternalURL *string `gorm:"column:gitlabInternalUrl;type:text" json:"gitlabInternalUrl"`
+	ApplicationID     *string `gorm:"column:applicationId;type:text" json:"applicationId"`
+	RedirectURI       *string `gorm:"column:redirectUri;type:text" json:"redirectUri"`
+	Secret            *string `gorm:"column:secret;type:text" json:"secret"`
+	GroupName         *string `gorm:"column:groupName;type:text" json:"groupName"`
+	AccessToken       *string `gorm:"column:accessToken;type:text" json:"accessToken"`
+	RefreshToken      *string `gorm:"column:refreshToken;type:text" json:"refreshToken"`
+	ExpiresAt         *int    `gorm:"column:expiresAt" json:"expiresAt"`
+	GitProviderID     string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
 	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
 }
@@ -84,11 +89,13 @@ func (g *Gitlab) BeforeCreate(tx *gorm.DB) error {
 
 // Bitbucket represents the bitbucket table.
 type Bitbucket struct {
-	BitbucketID     string  `gorm:"column:bitbucketId;primaryKey;type:text" json:"bitbucketId"`
-	BitbucketUsername *string `gorm:"column:bitbucketUsername;type:text" json:"bitbucketUsername"`
-	AppPassword     *string `gorm:"column:appPassword;type:text" json:"appPassword"`
+	BitbucketID            string  `gorm:"column:bitbucketId;primaryKey;type:text" json:"bitbucketId"`
+	BitbucketUsername      *string `gorm:"column:bitbucketUsername;type:text" json:"bitbucketUsername"`
+	BitbucketEmail         *string `gorm:"column:bitbucketEmail;type:text" json:"bitbucketEmail"`
+	AppPassword            *string `gorm:"column:appPassword;type:text" json:"appPassword"`
+	APIToken               *string `gorm:"column:apiToken;type:text" json:"apiToken"`
 	BitbucketWorkspaceName *string `gorm:"column:bitbucketWorkspaceName;type:text" json:"bitbucketWorkspaceName"`
-	GitProviderID   string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
+	GitProviderID          string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
 	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
 }
@@ -104,10 +111,18 @@ func (b *Bitbucket) BeforeCreate(tx *gorm.DB) error {
 
 // Gitea represents the gitea table.
 type Gitea struct {
-	GiteaID       string  `gorm:"column:giteaId;primaryKey;type:text" json:"giteaId"`
-	AccessToken   *string `gorm:"column:accessToken;type:text" json:"accessToken"`
-	GiteaURL      *string `gorm:"column:giteaUrl;type:text" json:"giteaUrl"`
-	GitProviderID string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
+	GiteaID             string  `gorm:"column:giteaId;primaryKey;type:text" json:"giteaId"`
+	GiteaURL            string  `gorm:"column:giteaUrl;type:text;not null;default:'https://gitea.com'" json:"giteaUrl"`
+	GiteaInternalURL    *string `gorm:"column:giteaInternalUrl;type:text" json:"giteaInternalUrl"`
+	RedirectURI         *string `gorm:"column:redirectUri;type:text" json:"redirectUri"`
+	ClientID            *string `gorm:"column:clientId;type:text" json:"clientId"`
+	ClientSecret        *string `gorm:"column:clientSecret;type:text" json:"clientSecret"`
+	AccessToken         *string `gorm:"column:accessToken;type:text" json:"accessToken"`
+	RefreshToken        *string `gorm:"column:refreshToken;type:text" json:"refreshToken"`
+	ExpiresAt           *int    `gorm:"column:expiresAt" json:"expiresAt"`
+	Scopes              *string `gorm:"column:scopes;type:text;default:'repo,repo:status,read:user,read:org'" json:"scopes"`
+	LastAuthenticatedAt *int    `gorm:"column:lastAuthenticatedAt" json:"lastAuthenticatedAt"`
+	GitProviderID       string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
 	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
 }

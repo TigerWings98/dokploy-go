@@ -212,6 +212,12 @@ func (c *Client) CleanupContainers(ctx context.Context) error {
 	return err
 }
 
+// CleanupBuildCache removes Docker build cache.
+func (c *Client) CleanupBuildCache(ctx context.Context) error {
+	_, err := c.cli.BuildCachePrune(ctx, types.BuildCachePruneOptions{All: true})
+	return err
+}
+
 // GetContainerByName finds a container by name.
 func (c *Client) GetContainerByName(ctx context.Context, name string) (*types.Container, error) {
 	containers, err := c.cli.ContainerList(ctx, containertypes.ListOptions{

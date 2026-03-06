@@ -117,6 +117,12 @@ func (h *Handler) ManualVolumeBackup(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Enqueue manual volume backup task
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueBackupRun(id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Volume backup queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Volume backup queued"})
 }

@@ -139,7 +139,17 @@ func (h *Handler) DeployApplication(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Enqueue deployment job
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueDeployApplication(appID, req.Title, req.Description)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":       "Deployment queued",
+			"applicationId": appID,
+			"taskId":        info.ID,
+		})
+	}
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":       "Deployment queued",
 		"applicationId": appID,
@@ -157,7 +167,18 @@ func (h *Handler) RedeployApplication(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Enqueue redeploy job
+	if h.Queue != nil {
+		title := "Redeploy"
+		info, err := h.Queue.EnqueueDeployApplication(appID, &title, nil)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":       "Redeployment queued",
+			"applicationId": appID,
+			"taskId":        info.ID,
+		})
+	}
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":       "Redeployment queued",
 		"applicationId": appID,
@@ -175,7 +196,17 @@ func (h *Handler) StopApplication(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Stop Docker service
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueStopApplication(appID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":       "Application stop requested",
+			"applicationId": appID,
+			"taskId":        info.ID,
+		})
+	}
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":       "Application stop requested",
 		"applicationId": appID,
@@ -193,7 +224,17 @@ func (h *Handler) StartApplication(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Start Docker service
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueStartApplication(appID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":       "Application start requested",
+			"applicationId": appID,
+			"taskId":        info.ID,
+		})
+	}
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":       "Application start requested",
 		"applicationId": appID,

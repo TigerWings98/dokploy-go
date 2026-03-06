@@ -112,6 +112,13 @@ func (h *Handler) DeployRedis(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueDeployDatabase(id, "redis")
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued"})
 }
 
@@ -126,5 +133,12 @@ func (h *Handler) StopRedis(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueStopDatabase(id, "redis")
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
 }

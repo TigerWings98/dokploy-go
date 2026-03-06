@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -39,6 +40,14 @@ func (h *Handler) ApplyRollback(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Apply rollback by updating docker service to the specified image
+	// Enqueue a deploy for the application (rollback uses the stored docker image)
+	if h.Queue != nil && rb.ApplicationID != "" {
+		title := fmt.Sprintf("Rollback to %s", rb.DockerImage)
+		info, err := h.Queue.EnqueueDeployApplication(rb.ApplicationID, &title, nil)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Rollback queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Rollback queued"})
 }

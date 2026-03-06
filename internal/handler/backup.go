@@ -119,6 +119,12 @@ func (h *Handler) ManualBackup(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Enqueue manual backup task
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueBackupRun(id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Backup queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Backup queued"})
 }

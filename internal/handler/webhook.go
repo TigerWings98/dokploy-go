@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -20,6 +21,27 @@ func (h *Handler) registerWebhookRoutes(e *echo.Echo) {
 	webhooks.POST("/gitlab", h.GitlabWebhook)
 	webhooks.POST("/bitbucket", h.BitbucketWebhook)
 	webhooks.POST("/gitea", h.GiteaWebhook)
+}
+
+// enqueueWebhookDeploys enqueues deployment tasks for matched apps and composes.
+func (h *Handler) enqueueWebhookDeploys(apps []schema.Application, composes []schema.Compose) {
+	if h.Queue == nil {
+		return
+	}
+	for _, app := range apps {
+		title := "Webhook Deploy"
+		_, err := h.Queue.EnqueueDeployApplication(app.ApplicationID, &title, nil)
+		if err != nil {
+			log.Printf("Failed to enqueue deploy for app %s: %v", app.ApplicationID, err)
+		}
+	}
+	for _, compose := range composes {
+		title := "Webhook Deploy"
+		_, err := h.Queue.EnqueueDeployCompose(compose.ComposeID, &title)
+		if err != nil {
+			log.Printf("Failed to enqueue deploy for compose %s: %v", compose.ComposeID, err)
+		}
+	}
 }
 
 // GithubWebhook handles GitHub webhook events (push and pull_request).
@@ -76,7 +98,6 @@ func (h *Handler) GithubWebhook(c echo.Context) error {
 }
 
 func (h *Handler) handleGithubPush(c echo.Context, body []byte, signature, repoFullName, branch string) error {
-	// GitHub apps use the "repository" and "branch" columns
 	var apps []schema.Application
 	err := h.DB.
 		Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
@@ -86,13 +107,14 @@ func (h *Handler) handleGithubPush(c echo.Context, body []byte, signature, repoF
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// Also check compose services
 	var composes []schema.Compose
 	h.DB.
 		Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
 			repoFullName, branch, schema.SourceTypeComposeGithub, true).
 		Find(&composes)
 
+	// Filter apps by webhook signature verification
+	var verified []schema.Application
 	for _, app := range apps {
 		if app.GithubID != nil {
 			var github schema.Github
@@ -104,11 +126,11 @@ func (h *Handler) handleGithubPush(c echo.Context, body []byte, signature, repoF
 				}
 			}
 		}
-		// TODO: Enqueue deployment task
+		verified = append(verified, app)
 	}
 
-	// TODO: Enqueue compose deployments
-	total := len(apps) + len(composes)
+	h.enqueueWebhookDeploys(verified, composes)
+	total := len(verified) + len(composes)
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }
 
@@ -122,7 +144,16 @@ func (h *Handler) handleGithubPR(c echo.Context, repoFullName, headBranch string
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Create/update preview deployments for each matching app
+	// Preview deployments: enqueue deploy for each matching app with PR branch
+	if h.Queue != nil {
+		for _, app := range apps {
+			title := fmt.Sprintf("Preview PR #%d", prNumber)
+			_, err := h.Queue.EnqueueDeployApplication(app.ApplicationID, &title, nil)
+			if err != nil {
+				log.Printf("Failed to enqueue preview deploy for app %s: %v", app.ApplicationID, err)
+			}
+		}
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d preview apps", len(apps))})
 }
 
@@ -162,7 +193,6 @@ func (h *Handler) GitlabWebhook(c echo.Context) error {
 
 	branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
 
-	// GitLab uses gitlabRepository and gitlabBranch columns
 	var apps []schema.Application
 	h.DB.
 		Where("\"gitlabRepository\" = ? AND \"gitlabBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
@@ -175,7 +205,7 @@ func (h *Handler) GitlabWebhook(c echo.Context) error {
 			payload.Project.PathWithNamespace, branch, schema.SourceTypeComposeGitlab, true).
 		Find(&composes)
 
-	// TODO: Enqueue deployments
+	h.enqueueWebhookDeploys(apps, composes)
 	total := len(apps) + len(composes)
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }
@@ -214,7 +244,6 @@ func (h *Handler) BitbucketWebhook(c echo.Context) error {
 		branch = payload.Push.Changes[0].New.Name
 	}
 
-	// Bitbucket uses bitbucketRepository and bitbucketBranch columns
 	var apps []schema.Application
 	h.DB.
 		Where("\"bitbucketRepository\" = ? AND \"bitbucketBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
@@ -227,7 +256,7 @@ func (h *Handler) BitbucketWebhook(c echo.Context) error {
 			payload.Repository.FullName, branch, schema.SourceTypeComposeBitbucket, true).
 		Find(&composes)
 
-	// TODO: Enqueue deployments
+	h.enqueueWebhookDeploys(apps, composes)
 	total := len(apps) + len(composes)
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }
@@ -257,7 +286,6 @@ func (h *Handler) GiteaWebhook(c echo.Context) error {
 
 	branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
 
-	// Gitea uses giteaRepository and giteaBranch columns
 	var apps []schema.Application
 	h.DB.
 		Where("\"giteaRepository\" = ? AND \"giteaBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
@@ -270,7 +298,7 @@ func (h *Handler) GiteaWebhook(c echo.Context) error {
 			payload.Repository.FullName, branch, schema.SourceTypeComposeGitea, true).
 		Find(&composes)
 
-	// TODO: Enqueue deployments
+	h.enqueueWebhookDeploys(apps, composes)
 	total := len(apps) + len(composes)
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }

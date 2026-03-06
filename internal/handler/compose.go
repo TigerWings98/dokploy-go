@@ -110,7 +110,26 @@ func (h *Handler) DeleteCompose(c echo.Context) error {
 
 func (h *Handler) DeployCompose(c echo.Context) error {
 	composeID := c.Param("composeId")
-	// TODO: Enqueue compose deployment
+
+	var compose schema.Compose
+	if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Compose not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueDeployCompose(composeID, nil)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":   "Deployment queued",
+			"composeId": composeID,
+			"taskId":    info.ID,
+		})
+	}
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":   "Deployment queued",
 		"composeId": composeID,
@@ -119,7 +138,26 @@ func (h *Handler) DeployCompose(c echo.Context) error {
 
 func (h *Handler) StopCompose(c echo.Context) error {
 	composeID := c.Param("composeId")
-	// TODO: Stop compose services
+
+	var compose schema.Compose
+	if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Compose not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueStopCompose(composeID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":   "Stop requested",
+			"composeId": composeID,
+			"taskId":    info.ID,
+		})
+	}
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":   "Stop requested",
 		"composeId": composeID,

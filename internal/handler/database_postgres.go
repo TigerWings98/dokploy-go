@@ -116,7 +116,13 @@ func (h *Handler) DeployPostgres(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Enqueue deploy task
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueDeployDatabase(id, "postgres")
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued"})
 }
 
@@ -131,6 +137,12 @@ func (h *Handler) StopPostgres(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Stop docker service
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueStopDatabase(id, "postgres")
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
 }

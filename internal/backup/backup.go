@@ -2,27 +2,108 @@ package backup
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/process"
+	"github.com/robfig/cron/v3"
 )
 
-// BackupService handles database backup operations.
-type BackupService struct {
-	db *db.DB
+// Service handles database backup operations with cron scheduling.
+type Service struct {
+	db       *db.DB
+	cfg      *config.Config
+	notifier *notify.Notifier
+	cron     *cron.Cron
+	mu       sync.Mutex
+	jobs     map[string]cron.EntryID
 }
 
-// NewBackupService creates a new BackupService.
-func NewBackupService(database *db.DB) *BackupService {
-	return &BackupService{db: database}
+// NewService creates a new backup Service.
+func NewService(database *db.DB, cfg *config.Config, notifier *notify.Notifier) *Service {
+	return &Service{
+		db:       database,
+		cfg:      cfg,
+		notifier: notifier,
+		cron:     cron.New(),
+		jobs:     make(map[string]cron.EntryID),
+	}
+}
+
+// InitCronJobs loads all enabled backups from DB and schedules them.
+func (s *Service) InitCronJobs() {
+	var backups []schema.Backup
+	enabled := true
+	if err := s.db.Where("enabled = ?", &enabled).Find(&backups).Error; err != nil {
+		log.Printf("Warning: failed to load backup schedules: %v", err)
+		return
+	}
+
+	for _, b := range backups {
+		if err := s.ScheduleBackup(b); err != nil {
+			log.Printf("Failed to schedule backup %s: %v", b.BackupID, err)
+		}
+	}
+
+	s.cron.Start()
+	log.Printf("Backup scheduler started with %d jobs", len(s.jobs))
+}
+
+// Stop stops the backup cron scheduler.
+func (s *Service) Stop() {
+	ctx := s.cron.Stop()
+	<-ctx.Done()
+}
+
+// ScheduleBackup adds or updates a backup cron job.
+func (s *Service) ScheduleBackup(backup schema.Backup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Remove existing
+	if entryID, ok := s.jobs[backup.BackupID]; ok {
+		s.cron.Remove(entryID)
+		delete(s.jobs, backup.BackupID)
+	}
+
+	if backup.Enabled == nil || !*backup.Enabled {
+		return nil
+	}
+
+	backupID := backup.BackupID
+	entryID, err := s.cron.AddFunc(backup.Schedule, func() {
+		if err := s.RunBackup(backupID); err != nil {
+			log.Printf("Backup %s failed: %v", backupID, err)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("invalid schedule %q: %w", backup.Schedule, err)
+	}
+
+	s.jobs[backup.BackupID] = entryID
+	return nil
+}
+
+// RemoveBackup removes a scheduled backup job.
+func (s *Service) RemoveBackup(backupID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if entryID, ok := s.jobs[backupID]; ok {
+		s.cron.Remove(entryID)
+		delete(s.jobs, backupID)
+	}
 }
 
 // RunBackup executes a backup for the given backup configuration.
-func (s *BackupService) RunBackup(backupID string) error {
+func (s *Service) RunBackup(backupID string) error {
 	var backup schema.Backup
 	if err := s.db.
 		Preload("Destination").
@@ -52,7 +133,7 @@ func (s *BackupService) RunBackup(backupID string) error {
 	os.MkdirAll(tmpDir, 0755)
 	dumpPath := filepath.Join(tmpDir, filename)
 
-	// Step 1: Create database dump
+	// Build dump command based on database type
 	var dumpCmd string
 	var serverID *string
 	var server *schema.Server
@@ -102,7 +183,7 @@ func (s *BackupService) RunBackup(backupID string) error {
 		return fmt.Errorf("unsupported database type for backup: %s", backup.DatabaseType)
 	}
 
-	// Execute dump
+	// Execute dump (local or remote)
 	if serverID != nil && server != nil && server.SSHKey != nil {
 		conn := process.SSHConnection{
 			Host:       server.IPAddress,
@@ -119,29 +200,24 @@ func (s *BackupService) RunBackup(backupID string) error {
 		}
 	}
 
-	// Step 2: Upload to S3 using rclone
+	// Upload to S3 using rclone (inline config to avoid temp file leaks)
 	dest := backup.Destination
-	rcloneConfig := fmt.Sprintf(
-		"[s3]\ntype = s3\nprovider = Other\naccess_key_id = %s\nsecret_access_key = %s\nregion = %s\nendpoint = %s",
+	rcloneEnv := fmt.Sprintf(
+		"RCLONE_CONFIG_S3_TYPE=s3 RCLONE_CONFIG_S3_PROVIDER=Other "+
+			"RCLONE_CONFIG_S3_ACCESS_KEY_ID=%s RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=%s "+
+			"RCLONE_CONFIG_S3_REGION=%s RCLONE_CONFIG_S3_ENDPOINT=%s",
 		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
 	)
 
-	rcloneConfigPath := filepath.Join(tmpDir, "rclone.conf")
-	if err := os.WriteFile(rcloneConfigPath, []byte(rcloneConfig), 0600); err != nil {
-		return fmt.Errorf("failed to write rclone config: %w", err)
-	}
-	defer os.Remove(rcloneConfigPath)
-
-	uploadCmd := fmt.Sprintf(
-		"rclone copy %s s3:%s/%s --config %s",
-		dumpPath, dest.Bucket, backup.Prefix, rcloneConfigPath,
-	)
+	uploadCmd := fmt.Sprintf("%s rclone copy %s s3:%s/%s",
+		rcloneEnv, dumpPath, dest.Bucket, backup.Prefix)
 
 	if _, err := process.ExecAsync(uploadCmd); err != nil {
+		os.Remove(dumpPath)
 		return fmt.Errorf("failed to upload backup: %w", err)
 	}
 
-	// Cleanup
+	// Cleanup local dump file immediately
 	os.Remove(dumpPath)
 
 	return nil

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/process"
@@ -16,42 +17,27 @@ import (
 type Scheduler struct {
 	cron *cron.Cron
 	db   *db.DB
+	cfg  *config.Config
 	mu   sync.Mutex
 	jobs map[string]cron.EntryID
 }
 
 // New creates a new Scheduler.
-func New(database *db.DB) *Scheduler {
+func New(database *db.DB, cfg *config.Config) *Scheduler {
 	return &Scheduler{
 		cron: cron.New(cron.WithSeconds()),
 		db:   database,
+		cfg:  cfg,
 		jobs: make(map[string]cron.EntryID),
 	}
 }
 
-// Start starts the scheduler and loads all enabled schedules from the database.
-func (s *Scheduler) Start() error {
-	if err := s.loadSchedules(); err != nil {
-		return fmt.Errorf("failed to load schedules: %w", err)
-	}
-
-	s.cron.Start()
-	log.Printf("Scheduler started with %d jobs", len(s.jobs))
-	return nil
-}
-
-// Stop stops the scheduler.
-func (s *Scheduler) Stop() {
-	ctx := s.cron.Stop()
-	<-ctx.Done()
-	log.Println("Scheduler stopped")
-}
-
-// loadSchedules loads all enabled schedules from the database.
-func (s *Scheduler) loadSchedules() error {
+// InitSchedules loads all enabled schedules and starts the cron runner.
+func (s *Scheduler) InitSchedules() {
 	var schedules []schema.Schedule
 	if err := s.db.Where("enabled = ?", true).Find(&schedules).Error; err != nil {
-		return err
+		log.Printf("Warning: failed to load schedules: %v", err)
+		return
 	}
 
 	for _, sched := range schedules {
@@ -60,7 +46,15 @@ func (s *Scheduler) loadSchedules() error {
 		}
 	}
 
-	return nil
+	s.cron.Start()
+	log.Printf("Scheduler started with %d jobs", len(s.jobs))
+}
+
+// Stop stops the scheduler.
+func (s *Scheduler) Stop() {
+	ctx := s.cron.Stop()
+	<-ctx.Done()
+	log.Println("Scheduler stopped")
 }
 
 // AddJob adds or updates a scheduled job.
@@ -145,6 +139,11 @@ func (s *Scheduler) executeSchedule(schedule schema.Schedule) {
 		"logPath":     "",
 		"description": output,
 	})
+}
+
+// RunNow executes a schedule immediately (bypassing cron).
+func (s *Scheduler) RunNow(schedule schema.Schedule) {
+	s.executeSchedule(schedule)
 }
 
 // ReloadSchedule reloads a single schedule from the database.

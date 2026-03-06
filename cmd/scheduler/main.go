@@ -20,10 +20,8 @@ func main() {
 	}
 	defer database.Close()
 
-	sched := scheduler.New(database)
-	if err := sched.Start(); err != nil {
-		log.Fatalf("failed to start scheduler: %v", err)
-	}
+	sched := scheduler.New(database, cfg)
+	sched.InitSchedules()
 
 	log.Println("Dokploy scheduler started")
 

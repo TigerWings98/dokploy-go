@@ -16,6 +16,9 @@ type Domain struct {
 	UniqueConfigKey   *int            `gorm:"column:uniqueConfigKey" json:"uniqueConfigKey"`
 	CertificateType   CertificateType `gorm:"column:certificateType;type:text;not null;default:'none'" json:"certificateType"`
 	CustomCertResolver *string        `gorm:"column:customCertResolver;type:text" json:"customCertResolver"`
+	DomainType        DomainType      `gorm:"column:domainType;type:text;default:'application'" json:"domainType"`
+	InternalPath      *string         `gorm:"column:internalPath;type:text;default:'/'" json:"internalPath"`
+	StripPath         bool            `gorm:"column:stripPath;not null;default:false" json:"stripPath"`
 	CreatedAt         string          `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	ApplicationID     *string         `gorm:"column:applicationId;type:text" json:"applicationId"`
 	ComposeID         *string         `gorm:"column:composeId;type:text" json:"composeId"`

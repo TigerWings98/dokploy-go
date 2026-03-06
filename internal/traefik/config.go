@@ -60,6 +60,7 @@ type Middleware struct {
 	RedirectScheme *RedirectSchemeMiddleware `yaml:"redirectScheme,omitempty"`
 	Headers        *HeadersMiddleware        `yaml:"headers,omitempty"`
 	StripPrefix    *StripPrefixMiddleware    `yaml:"stripPrefix,omitempty"`
+	AddPrefix      *AddPrefixMiddleware      `yaml:"addPrefix,omitempty"`
 }
 
 // BasicAuthMiddleware for basic auth.
@@ -89,6 +90,11 @@ type HeadersMiddleware struct {
 // StripPrefixMiddleware for stripping path prefixes.
 type StripPrefixMiddleware struct {
 	Prefixes []string `yaml:"prefixes"`
+}
+
+// AddPrefixMiddleware for adding path prefixes.
+type AddPrefixMiddleware struct {
+	Prefix string `yaml:"prefix"`
 }
 
 // TLS represents TLS configuration.

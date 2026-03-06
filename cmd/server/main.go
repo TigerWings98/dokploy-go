@@ -35,6 +35,11 @@ func main() {
 	}
 	defer database.Close()
 
+	// Auto-migrate database schema
+	if err := database.AutoMigrate(); err != nil {
+		log.Fatalf("failed to migrate database: %v", err)
+	}
+
 	// Initialize auth
 	a := auth.New(database)
 
@@ -154,6 +159,9 @@ func main() {
 	// Register WebSocket routes
 	wsHandler := ws.NewHandler(database, dockerClient, a)
 	wsHandler.RegisterRoutes(e)
+
+	// Register frontend routes (must be last - catches all unmatched routes)
+	h.RegisterFrontendRoutes(e)
 
 	// Graceful shutdown
 	port := os.Getenv("PORT")

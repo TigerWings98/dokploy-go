@@ -85,6 +85,9 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	// Public routes
 	e.GET("/health", h.HealthCheck)
 
+	// Auth routes (public, no auth middleware - better-auth compatible)
+	h.registerAuthRoutes(e.Group("/api/auth"))
+
 	// API v1 group with authentication
 	api := e.Group("/api/v1")
 	api.Use(mw.AuthMiddleware(h.Auth))

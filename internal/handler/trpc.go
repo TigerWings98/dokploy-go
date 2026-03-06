@@ -387,6 +387,25 @@ func (h *Handler) buildRegistry() procedureRegistry {
 	// ===================== SIMPLE CRUD ROUTERS =====================
 	h.registerSimpleCRUDTRPC(r, getDefaultMember)
 
+	// ===================== SSO =====================
+	r["sso.showSignInWithSSO"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return false, nil
+	}
+
+	// ===================== ADMIN =====================
+	r["admin.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		settings, err := h.getOrCreateSettings()
+		if err != nil {
+			return nil, err
+		}
+		return settings, nil
+	}
+
+	// ===================== AUTH-RELATED QUERIES =====================
+	r["auth.isAdminPresent"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return h.DB.IsAdminPresent(), nil
+	}
+
 	return r
 }
 

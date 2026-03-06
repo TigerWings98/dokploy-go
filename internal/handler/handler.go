@@ -185,6 +185,11 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	// Environment routes
 	h.registerEnvironmentRoutes(api.Group("/environment"))
 
+	// tRPC compatibility layer (matches frontend's tRPC client calls)
+	trpc := e.Group("/api/trpc")
+	trpc.Use(mw.AuthMiddleware(h.Auth))
+	trpc.Any("/:procedures", h.HandleTRPC)
+
 	// Webhook routes (public, no auth)
 	h.registerWebhookRoutes(e)
 }

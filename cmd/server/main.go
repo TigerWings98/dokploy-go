@@ -13,8 +13,10 @@ import (
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/docker"
 	"github.com/dokploy/dokploy/internal/handler"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/queue"
 	"github.com/dokploy/dokploy/internal/setup"
+	"github.com/dokploy/dokploy/internal/traefik"
 	"github.com/dokploy/dokploy/internal/ws"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -44,6 +46,12 @@ func main() {
 		log.Printf("Warning: server setup incomplete: %v", err)
 	}
 
+	// Initialize Traefik config manager
+	traefikMgr := traefik.NewManager(cfg.Paths.DynamicTraefikPath)
+
+	// Initialize notifier
+	notifier := notify.NewNotifier(database)
+
 	// Initialize task queue (optional - requires Redis)
 	redisAddr := os.Getenv("REDIS_URL")
 	if redisAddr == "" {
@@ -52,17 +60,48 @@ func main() {
 	q := queue.NewQueue(redisAddr)
 	defer q.Close()
 
-	// Start task worker
+	// Start task worker with placeholder handlers
+	// These will be replaced with real service-layer implementations
 	worker := queue.NewWorker(redisAddr, 10, queue.TaskHandlers{
-		// TODO: Wire actual service handlers
-		HandleDeployApplication: nil,
-		HandleDeployCompose:     nil,
-		HandleDeployDatabase:    nil,
-		HandleRebuildDatabase:   nil,
-		HandleStopApplication:   nil,
-		HandleStartApplication:  nil,
-		HandleBackupRun:         nil,
-		HandleDockerCleanup:     nil,
+		HandleDeployApplication: func(ctx context.Context, payload queue.DeployApplicationPayload) error {
+			log.Printf("Deploy application: %s", payload.ApplicationID)
+			// TODO: Call actual deployment service
+			return nil
+		},
+		HandleDeployCompose: func(ctx context.Context, payload queue.DeployComposePayload) error {
+			log.Printf("Deploy compose: %s", payload.ComposeID)
+			return nil
+		},
+		HandleDeployDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
+			log.Printf("Deploy database: %s (%s)", payload.DatabaseID, payload.Type)
+			return nil
+		},
+		HandleRebuildDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
+			log.Printf("Rebuild database: %s (%s)", payload.DatabaseID, payload.Type)
+			return nil
+		},
+		HandleStopApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+			log.Printf("Stop application: %s", payload.ID)
+			if dockerClient != nil {
+				return dockerClient.RemoveService(ctx, payload.ID)
+			}
+			return nil
+		},
+		HandleStartApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+			log.Printf("Start application: %s", payload.ID)
+			return nil
+		},
+		HandleBackupRun: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+			log.Printf("Backup run: %s", payload.ID)
+			return nil
+		},
+		HandleDockerCleanup: func(ctx context.Context) error {
+			log.Println("Docker cleanup")
+			if dockerClient != nil {
+				return dockerClient.PruneSystem(ctx)
+			}
+			return nil
+		},
 	})
 	go func() {
 		if err := worker.Start(); err != nil {
@@ -85,7 +124,13 @@ func main() {
 	}))
 
 	// Register REST API routes
-	h := handler.New(database, a)
+	h := handler.New(database, a,
+		handler.WithQueue(q),
+		handler.WithDocker(dockerClient),
+		handler.WithTraefik(traefikMgr),
+		handler.WithNotifier(notifier),
+		handler.WithCertsPath(cfg.Paths.CertificatesPath),
+	)
 	h.RegisterRoutes(e)
 
 	// Register WebSocket routes
@@ -121,7 +166,4 @@ func main() {
 	}
 
 	log.Println("Server stopped")
-
-	// Suppress unused variable warning
-	_ = q
 }

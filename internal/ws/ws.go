@@ -3,12 +3,18 @@ package ws
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/dokploy/dokploy/internal/auth"
 	"github.com/dokploy/dokploy/internal/db"
@@ -19,7 +25,9 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin:  func(r *http.Request) bool { return true },
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
 }
 
 // Handler holds WebSocket handler dependencies.
@@ -59,7 +67,27 @@ func (h *Handler) authenticate(r *http.Request) (*schema.User, error) {
 	return user, nil
 }
 
-// DeploymentLogs streams deployment log file content over WebSocket.
+// --- Input validation (prevent command injection) ---
+
+var (
+	reContainerID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+	reTail        = regexp.MustCompile(`^[0-9]{1,5}$`)
+	reSince       = regexp.MustCompile(`^(all|[0-9]+[smhd])$`)
+	reSearch      = regexp.MustCompile(`^[a-zA-Z0-9 ._-]{0,500}$`)
+	allowedShells = map[string]bool{
+		"sh": true, "bash": true, "zsh": true, "ash": true,
+		"/bin/sh": true, "/bin/bash": true, "/bin/zsh": true, "/bin/ash": true,
+	}
+)
+
+func isValidContainerID(s string) bool { return s != "" && reContainerID.MatchString(s) }
+func isValidTail(s string) bool        { return reTail.MatchString(s) }
+func isValidSince(s string) bool       { return reSince.MatchString(s) }
+
+// --- Deployment Logs (tail -f with polling) ---
+// Memory note: Uses polling instead of fsnotify to avoid watcher goroutine leaks.
+// Fixed 4KB read buffer, no accumulation. Goroutine exits when client disconnects.
+
 func (h *Handler) DeploymentLogs(c echo.Context) error {
 	_, err := h.authenticate(c.Request())
 	if err != nil {
@@ -71,43 +99,10 @@ func (h *Handler) DeploymentLogs(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "logPath is required")
 	}
 
-	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	file, err := os.Open(logPath)
-	if err != nil {
-		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error opening log: %v", err)))
-		return nil
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		if err := conn.WriteMessage(websocket.TextMessage, scanner.Bytes()); err != nil {
-			break
-		}
-	}
-
-	// Watch for new content (tail -f behavior)
-	// TODO: Use fsnotify or polling for real-time updates
-
-	return nil
-}
-
-// ContainerLogs streams Docker container logs over WebSocket.
-func (h *Handler) ContainerLogs(c echo.Context) error {
-	_, err := h.authenticate(c.Request())
-	if err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
-	containerID := c.QueryParam("containerId")
-	tail := c.QueryParam("tail")
-	if tail == "" {
-		tail = "100"
+	// Security: only allow paths under /etc/dokploy or /tmp
+	cleanPath := filepath.Clean(logPath)
+	if !strings.HasPrefix(cleanPath, "/etc/dokploy/") && !strings.HasPrefix(cleanPath, "/tmp/") {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid log path")
 	}
 
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
@@ -119,7 +114,104 @@ func (h *Handler) ContainerLogs(c echo.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Listen for client disconnect
+	// Detect client disconnect
+	go func() {
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error opening log: %v", err)))
+		return nil
+	}
+	defer file.Close()
+
+	// Read existing content
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 4096), 4096)
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, scanner.Bytes()); err != nil {
+			return nil
+		}
+	}
+
+	// Poll for new content (tail -f behavior)
+	// Polling at 500ms is lighter than fsnotify for single-file watching
+	// and avoids inotify descriptor leaks.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			for {
+				n, readErr := file.Read(buf)
+				if n > 0 {
+					if writeErr := conn.WriteMessage(websocket.TextMessage, buf[:n]); writeErr != nil {
+						return nil
+					}
+				}
+				if readErr != nil {
+					break // EOF or error, wait for next tick
+				}
+			}
+		}
+	}
+}
+
+// --- Container Logs ---
+// Memory note: Fixed 4KB buffer, streams directly from Docker daemon.
+// No intermediate buffering. Context cancellation ensures clean shutdown.
+
+func (h *Handler) ContainerLogs(c echo.Context) error {
+	_, err := h.authenticate(c.Request())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	containerID := c.QueryParam("containerId")
+	if !isValidContainerID(containerID) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid containerId")
+	}
+
+	tail := c.QueryParam("tail")
+	if tail == "" {
+		tail = "100"
+	} else if !isValidTail(tail) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid tail value")
+	}
+
+	since := c.QueryParam("since")
+	if since != "" && since != "all" && !isValidSince(since) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid since value")
+	}
+
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
+	}
+
+	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Detect client disconnect
 	go func() {
 		for {
 			_, _, err := conn.ReadMessage()
@@ -137,6 +229,7 @@ func (h *Handler) ContainerLogs(c echo.Context) error {
 	}
 	defer reader.Close()
 
+	// Stream with fixed buffer — no accumulation
 	buf := make([]byte, 4096)
 	for {
 		n, readErr := reader.Read(buf)
@@ -153,11 +246,37 @@ func (h *Handler) ContainerLogs(c echo.Context) error {
 	return nil
 }
 
-// DockerStats streams Docker stats over WebSocket.
+// --- Docker Stats ---
+// Memory note: Polls every 1.3s (matching TS version), single JSON snapshot per poll.
+// No streaming stats — each request is a one-shot read then close.
+// This avoids the Docker stats stream leak that plagues long-running connections.
+
+type containerStats struct {
+	Name     string  `json:"name"`
+	CPUPerc  float64 `json:"cpuPerc"`
+	MemUsage uint64  `json:"memUsage"`
+	MemLimit uint64  `json:"memLimit"`
+	MemPerc  float64 `json:"memPerc"`
+	NetIO    string  `json:"netIO"`
+	BlockIO  string  `json:"blockIO"`
+}
+
 func (h *Handler) DockerStats(c echo.Context) error {
 	_, err := h.authenticate(c.Request())
 	if err != nil {
 		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	appName := c.QueryParam("appName")
+	if appName == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "appName is required")
+	}
+	if !isValidContainerID(appName) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid appName")
+	}
+
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
 	}
 
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
@@ -166,12 +285,86 @@ func (h *Handler) DockerStats(c echo.Context) error {
 	}
 	defer conn.Close()
 
-	// TODO: Stream docker stats using Docker SDK
-	conn.WriteMessage(websocket.TextMessage, []byte(`{"message":"docker stats not yet implemented"}`))
-	return nil
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Detect client disconnect
+	go func() {
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	// Poll docker stats every 1.3 seconds
+	ticker := time.NewTicker(1300 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			stats, err := h.getContainerStats(ctx, appName)
+			if err != nil {
+				// Container might not be running yet, send empty
+				conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"container not found"}`))
+				continue
+			}
+			data, _ := json.Marshal(stats)
+			if writeErr := conn.WriteMessage(websocket.TextMessage, data); writeErr != nil {
+				return nil
+			}
+		}
+	}
 }
 
-// Terminal provides a WebSocket-based terminal session.
+func (h *Handler) getContainerStats(ctx context.Context, appName string) (*containerStats, error) {
+	// Use docker stats --no-stream for a single snapshot (no memory leak)
+	cmd := exec.CommandContext(ctx, "docker", "stats", "--no-stream",
+		"--format", `{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}`,
+		"--filter", fmt.Sprintf("name=%s", appName))
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	line := strings.TrimSpace(string(output))
+	if line == "" {
+		return nil, fmt.Errorf("no stats found")
+	}
+
+	// Take first line if multiple matches
+	lines := strings.Split(line, "\n")
+	parts := strings.Split(lines[0], "\t")
+	if len(parts) < 6 {
+		return nil, fmt.Errorf("unexpected stats format")
+	}
+
+	cpuStr := strings.TrimSuffix(parts[1], "%")
+	cpuPerc, _ := strconv.ParseFloat(cpuStr, 64)
+
+	memPercStr := strings.TrimSuffix(parts[3], "%")
+	memPerc, _ := strconv.ParseFloat(memPercStr, 64)
+
+	return &containerStats{
+		Name:    parts[0],
+		CPUPerc: cpuPerc,
+		MemPerc: memPerc,
+		NetIO:   parts[4],
+		BlockIO: parts[5],
+	}, nil
+}
+
+// --- Terminal ---
+// Memory note: Fixed 4KB buffer each direction. Process killed on disconnect.
+// Shell whitelist prevents command injection. No PTY library dependency
+// (avoids node-pty's memory overhead).
+
 func (h *Handler) Terminal(c echo.Context) error {
 	_, err := h.authenticate(c.Request())
 	if err != nil {
@@ -179,8 +372,16 @@ func (h *Handler) Terminal(c echo.Context) error {
 	}
 
 	containerID := c.QueryParam("containerId")
-	if containerID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "containerId is required")
+	if !isValidContainerID(containerID) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid containerId")
+	}
+
+	shell := c.QueryParam("shell")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	if !allowedShells[shell] {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid shell")
 	}
 
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
@@ -189,11 +390,10 @@ func (h *Handler) Terminal(c echo.Context) error {
 	}
 	defer conn.Close()
 
-	// Use docker exec to create an interactive session
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-it", containerID, "/bin/sh")
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", containerID, shell)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -207,7 +407,7 @@ func (h *Handler) Terminal(c echo.Context) error {
 		return nil
 	}
 
-	cmd.Stderr = cmd.Stdout // Combine stderr with stdout
+	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to start terminal: %v", err)))

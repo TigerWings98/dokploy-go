@@ -119,6 +119,27 @@ func (c *Client) ScaleService(ctx context.Context, serviceName string, replicas 
 	return err
 }
 
+// RestartService forces an update on a service to restart all tasks.
+func (c *Client) RestartService(ctx context.Context, serviceName string) error {
+	svc, _, err := c.cli.ServiceInspectWithRaw(ctx, serviceName, types.ServiceInspectOptions{})
+	if err != nil {
+		return err
+	}
+
+	svc.Spec.TaskTemplate.ForceUpdate++
+	_, err = c.cli.ServiceUpdate(ctx, svc.ID, svc.Version, svc.Spec, types.ServiceUpdateOptions{})
+	return err
+}
+
+// ContainerStats returns a single snapshot of container stats.
+func (c *Client) ContainerStats(ctx context.Context, containerID string) (io.ReadCloser, error) {
+	stats, err := c.cli.ContainerStats(ctx, containerID, false)
+	if err != nil {
+		return nil, err
+	}
+	return stats.Body, nil
+}
+
 // PruneSystem performs a Docker system prune.
 func (c *Client) PruneSystem(ctx context.Context) error {
 	_, err := c.cli.ContainersPrune(ctx, filters.Args{})
@@ -171,6 +192,24 @@ func (c *Client) CreateNetwork(ctx context.Context, name string, driver string) 
 // RemoveVolume removes a Docker volume.
 func (c *Client) RemoveVolume(ctx context.Context, volumeName string, force bool) error {
 	return c.cli.VolumeRemove(ctx, volumeName, force)
+}
+
+// CleanupImages removes dangling images.
+func (c *Client) CleanupImages(ctx context.Context) error {
+	_, err := c.cli.ImagesPrune(ctx, filters.NewArgs(filters.Arg("dangling", "true")))
+	return err
+}
+
+// CleanupVolumes removes unused volumes.
+func (c *Client) CleanupVolumes(ctx context.Context) error {
+	_, err := c.cli.VolumesPrune(ctx, filters.Args{})
+	return err
+}
+
+// CleanupContainers removes stopped containers.
+func (c *Client) CleanupContainers(ctx context.Context) error {
+	_, err := c.cli.ContainersPrune(ctx, filters.Args{})
+	return err
 }
 
 // GetContainerByName finds a container by name.

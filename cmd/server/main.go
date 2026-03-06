@@ -9,12 +9,16 @@ import (
 	"time"
 
 	"github.com/dokploy/dokploy/internal/auth"
+	"github.com/dokploy/dokploy/internal/backup"
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
+	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/docker"
 	"github.com/dokploy/dokploy/internal/handler"
 	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/queue"
+	"github.com/dokploy/dokploy/internal/scheduler"
+	"github.com/dokploy/dokploy/internal/service"
 	"github.com/dokploy/dokploy/internal/setup"
 	"github.com/dokploy/dokploy/internal/traefik"
 	"github.com/dokploy/dokploy/internal/ws"
@@ -34,7 +38,7 @@ func main() {
 	// Initialize auth
 	a := auth.New(database)
 
-	// Initialize Docker client
+	// Initialize Docker client (single connection, reused everywhere)
 	dockerClient, err := docker.NewClient()
 	if err != nil {
 		log.Printf("Warning: failed to initialize Docker client: %v", err)
@@ -52,6 +56,21 @@ func main() {
 	// Initialize notifier
 	notifier := notify.NewNotifier(database)
 
+	// Initialize service layer
+	appSvc := service.NewApplicationService(database, dockerClient, cfg)
+	composeSvc := service.NewComposeService(database, dockerClient, cfg)
+	dbSvc := service.NewDatabaseService(database, dockerClient, cfg)
+
+	// Initialize backup service with cron scheduler
+	backupSvc := backup.NewService(database, cfg, notifier)
+	backupSvc.InitCronJobs()
+	defer backupSvc.Stop()
+
+	// Initialize schedule service
+	sched := scheduler.New(database, cfg)
+	sched.InitSchedules()
+	defer sched.Stop()
+
 	// Initialize task queue (optional - requires Redis)
 	redisAddr := os.Getenv("REDIS_URL")
 	if redisAddr == "" {
@@ -60,40 +79,35 @@ func main() {
 	q := queue.NewQueue(redisAddr)
 	defer q.Close()
 
-	// Start task worker with placeholder handlers
-	// These will be replaced with real service-layer implementations
+	// Start task worker with real service handlers
 	worker := queue.NewWorker(redisAddr, 10, queue.TaskHandlers{
 		HandleDeployApplication: func(ctx context.Context, payload queue.DeployApplicationPayload) error {
 			log.Printf("Deploy application: %s", payload.ApplicationID)
-			// TODO: Call actual deployment service
-			return nil
+			return appSvc.Deploy(payload.ApplicationID, payload.Title, payload.Description)
 		},
 		HandleDeployCompose: func(ctx context.Context, payload queue.DeployComposePayload) error {
 			log.Printf("Deploy compose: %s", payload.ComposeID)
-			return nil
+			return composeSvc.Deploy(payload.ComposeID, payload.Title)
 		},
 		HandleDeployDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
 			log.Printf("Deploy database: %s (%s)", payload.DatabaseID, payload.Type)
-			return nil
+			return deployDatabaseByType(dbSvc, payload.DatabaseID, payload.Type)
 		},
 		HandleRebuildDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
 			log.Printf("Rebuild database: %s (%s)", payload.DatabaseID, payload.Type)
-			return nil
+			return dbSvc.RebuildDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
 		},
 		HandleStopApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 			log.Printf("Stop application: %s", payload.ID)
-			if dockerClient != nil {
-				return dockerClient.RemoveService(ctx, payload.ID)
-			}
-			return nil
+			return appSvc.Stop(payload.ID)
 		},
 		HandleStartApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 			log.Printf("Start application: %s", payload.ID)
-			return nil
+			return appSvc.Start(payload.ID)
 		},
 		HandleBackupRun: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 			log.Printf("Backup run: %s", payload.ID)
-			return nil
+			return backupSvc.RunBackup(payload.ID)
 		},
 		HandleDockerCleanup: func(ctx context.Context) error {
 			log.Println("Docker cleanup")
@@ -130,6 +144,7 @@ func main() {
 		handler.WithTraefik(traefikMgr),
 		handler.WithNotifier(notifier),
 		handler.WithCertsPath(cfg.Paths.CertificatesPath),
+		handler.WithScheduler(sched),
 	)
 	h.RegisterRoutes(e)
 
@@ -166,4 +181,21 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+func deployDatabaseByType(dbSvc *service.DatabaseService, id, dbType string) error {
+	switch dbType {
+	case "postgres":
+		return dbSvc.DeployPostgres(id)
+	case "mysql":
+		return dbSvc.DeployMySQL(id)
+	case "mariadb":
+		return dbSvc.DeployMariaDB(id)
+	case "mongo":
+		return dbSvc.DeployMongo(id)
+	case "redis":
+		return dbSvc.DeployRedis(id)
+	default:
+		return nil
+	}
 }

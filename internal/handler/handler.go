@@ -7,6 +7,7 @@ import (
 	mw "github.com/dokploy/dokploy/internal/middleware"
 	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/queue"
+	"github.com/dokploy/dokploy/internal/scheduler"
 	"github.com/dokploy/dokploy/internal/traefik"
 	"github.com/labstack/echo/v4"
 )
@@ -19,6 +20,7 @@ type Handler struct {
 	Docker    *docker.Client
 	Traefik   *traefik.Manager
 	Notifier  *notify.Notifier
+	Scheduler *scheduler.Scheduler
 	CertsPath string
 }
 
@@ -52,6 +54,11 @@ func WithTraefik(t *traefik.Manager) HandlerOption {
 // WithNotifier sets the notification sender.
 func WithNotifier(n *notify.Notifier) HandlerOption {
 	return func(h *Handler) { h.Notifier = n }
+}
+
+// WithScheduler sets the scheduler.
+func WithScheduler(s *scheduler.Scheduler) HandlerOption {
+	return func(h *Handler) { h.Scheduler = s }
 }
 
 // WithCertsPath sets the certificates directory path.

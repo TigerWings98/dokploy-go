@@ -2,10 +2,13 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -142,6 +145,14 @@ func (h *Handler) TestDestination(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Test S3 connection via rclone
+	// Test S3 connection using rclone lsd command
+	cmd := fmt.Sprintf(
+		"RCLONE_CONFIG_S3_TYPE=s3 RCLONE_CONFIG_S3_ACCESS_KEY_ID=%s RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=%s RCLONE_CONFIG_S3_REGION=%s RCLONE_CONFIG_S3_ENDPOINT=%s rclone lsd s3:%s --max-depth 1",
+		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint, dest.Bucket,
+	)
+	_, execErr := process.ExecAsync(cmd, process.WithTimeout(30*time.Second))
+	if execErr != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Connection failed: %v", execErr))
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Connection successful"})
 }

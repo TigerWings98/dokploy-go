@@ -1,12 +1,18 @@
 package handler
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 )
 
@@ -128,8 +134,30 @@ func (h *Handler) DeleteSSHKey(c echo.Context) error {
 }
 
 func (h *Handler) GenerateSSHKey(c echo.Context) error {
-	// TODO: Generate ed25519 key pair using crypto/ed25519
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	// Marshal private key to PEM
+	privBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privBytes,
+	})
+
+	// Marshal public key to OpenSSH format
+	sshPubKey, err := ssh.NewPublicKey(pubKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	pubKeyStr := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPubKey)))
+
 	return c.JSON(http.StatusOK, map[string]string{
-		"message": "SSH key generation not yet implemented",
+		"publicKey":  pubKeyStr,
+		"privateKey": string(privPEM),
 	})
 }

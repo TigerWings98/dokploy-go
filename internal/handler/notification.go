@@ -124,6 +124,10 @@ func (h *Handler) TestNotification(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Send test notification via notify.Notifier
+	if h.Notifier != nil {
+		if err := h.Notifier.SendTest(&n); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Test notification sent"})
 }

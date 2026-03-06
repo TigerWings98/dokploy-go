@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/smtp"
 	"strings"
 	"time"
 
@@ -52,6 +53,37 @@ func (n *Notifier) Send(orgID string, payload NotificationPayload) {
 			continue
 		}
 		go n.sendToChannel(&notif, payload)
+	}
+}
+
+// SendTest sends a test notification to a specific channel.
+func (n *Notifier) SendTest(notif *schema.Notification) error {
+	payload := NotificationPayload{
+		Event:   EventDokployRestart,
+		Title:   "Test Notification",
+		Message: "This is a test notification from Dokploy.",
+	}
+	return n.sendToChannelSync(notif, payload)
+}
+
+func (n *Notifier) sendToChannelSync(notif *schema.Notification, payload NotificationPayload) error {
+	switch notif.Type {
+	case schema.NotificationTypeSlack:
+		return sendSlack(notif, payload)
+	case schema.NotificationTypeDiscord:
+		return sendDiscord(notif, payload)
+	case schema.NotificationTypeTelegram:
+		return sendTelegram(notif, payload)
+	case schema.NotificationTypeWebhook:
+		return sendWebhook(notif, payload)
+	case schema.NotificationTypeEmail:
+		return sendEmail(notif, payload)
+	case schema.NotificationTypeGotify:
+		return sendGotify(notif, payload)
+	case schema.NotificationTypeNtfy:
+		return sendNtfy(notif, payload)
+	default:
+		return fmt.Errorf("unsupported notification type: %s", notif.Type)
 	}
 }
 
@@ -149,11 +181,33 @@ func sendWebhook(notif *schema.Notification, payload NotificationPayload) error 
 }
 
 func sendEmail(notif *schema.Notification, payload NotificationPayload) error {
-	// TODO: Implement SMTP email sending
-	// Use go-mail library
-	_ = notif
-	_ = payload
-	return nil
+	if notif.SmtpServer == nil || notif.SmtpFromAddress == nil || len(notif.SmtpToAddress) == 0 {
+		return fmt.Errorf("SMTP configuration incomplete")
+	}
+
+	port := 587
+	if notif.SmtpPort != nil {
+		port = *notif.SmtpPort
+	}
+
+	addr := fmt.Sprintf("%s:%d", *notif.SmtpServer, port)
+
+	subject := payload.Title
+	body := payload.Message
+
+	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
+		*notif.SmtpFromAddress,
+		strings.Join(notif.SmtpToAddress, ","),
+		subject,
+		body,
+	)
+
+	var auth smtp.Auth
+	if notif.SmtpUsername != nil && notif.SmtpPassword != nil {
+		auth = smtp.PlainAuth("", *notif.SmtpUsername, *notif.SmtpPassword, *notif.SmtpServer)
+	}
+
+	return smtp.SendMail(addr, auth, *notif.SmtpFromAddress, notif.SmtpToAddress, []byte(msg))
 }
 
 func sendGotify(notif *schema.Notification, payload NotificationPayload) error {

@@ -2,10 +2,13 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -149,6 +152,12 @@ func (h *Handler) TestRegistry(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: docker login test
+	// Test docker login
+	cmd := fmt.Sprintf("echo %q | docker login %s -u %s --password-stdin",
+		reg.Password, reg.RegistryURL, reg.Username)
+	_, execErr := process.ExecAsync(cmd, process.WithTimeout(30*time.Second))
+	if execErr != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Registry login failed: %v", execErr))
+	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Registry connection successful"})
 }

@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
+	"github.com/dokploy/dokploy/internal/process"
+	"github.com/dokploy/dokploy/internal/setup"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -16,6 +20,14 @@ func (h *Handler) registerServerRoutes(g *echo.Group) {
 	g.GET("", h.ListServers)
 	g.PUT("/:serverId", h.UpdateServer)
 	g.DELETE("/:serverId", h.DeleteServer)
+	g.POST("/:serverId/setup", h.SetupServer)
+	g.POST("/:serverId/validate", h.ValidateServer)
+
+	// Swarm management
+	g.GET("/swarm/info", h.GetSwarmInfo)
+	g.GET("/swarm/tokens", h.GetSwarmTokens)
+	g.GET("/swarm/nodes", h.ListSwarmNodes)
+	g.DELETE("/swarm/nodes/:nodeId", h.RemoveSwarmNode)
 }
 
 type CreateServerRequest struct {
@@ -139,4 +151,135 @@ func (h *Handler) DeleteServer(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) SetupServer(c echo.Context) error {
+	serverID := c.Param("serverId")
+
+	var server schema.Server
+	if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", serverID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Server not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if server.SSHKey == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "SSH key not configured")
+	}
+
+	isBuildServer := server.ServerType == schema.ServerTypeBuild
+	script := setup.GenerateServerSetupScript(isBuildServer)
+
+	conn := process.SSHConnection{
+		Host:       server.IPAddress,
+		Port:       server.Port,
+		Username:   server.Username,
+		PrivateKey: server.SSHKey.PrivateKey,
+	}
+
+	result, err := process.ExecAsyncRemote(conn, script, nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Setup failed: %v", err))
+	}
+
+	// Update server status
+	h.DB.Model(&server).Update("serverStatus", "active")
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Server setup completed",
+		"output":  result.Stdout,
+	})
+}
+
+func (h *Handler) ValidateServer(c echo.Context) error {
+	serverID := c.Param("serverId")
+
+	var server schema.Server
+	if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", serverID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Server not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if server.SSHKey == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "SSH key not configured")
+	}
+
+	script := setup.GenerateValidationScript()
+	conn := process.SSHConnection{
+		Host:       server.IPAddress,
+		Port:       server.Port,
+		Username:   server.Username,
+		PrivateKey: server.SSHKey.PrivateKey,
+	}
+
+	result, err := process.ExecAsyncRemote(conn, script, nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Validation failed: %v", err))
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Validation completed",
+		"output":  result.Stdout,
+	})
+}
+
+func (h *Handler) GetSwarmInfo(c echo.Context) error {
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
+	}
+
+	mgr := setup.NewSwarmManager(h.Docker)
+	info, err := mgr.GetSwarmInfo(context.Background())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, info)
+}
+
+func (h *Handler) GetSwarmTokens(c echo.Context) error {
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
+	}
+
+	mgr := setup.NewSwarmManager(h.Docker)
+	tokens, err := mgr.GetJoinTokens(context.Background())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, tokens)
+}
+
+func (h *Handler) ListSwarmNodes(c echo.Context) error {
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
+	}
+
+	mgr := setup.NewSwarmManager(h.Docker)
+	nodes, err := mgr.ListNodes(context.Background())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, nodes)
+}
+
+func (h *Handler) RemoveSwarmNode(c echo.Context) error {
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
+	}
+
+	nodeID := c.Param("nodeId")
+	force := c.QueryParam("force") == "true"
+
+	mgr := setup.NewSwarmManager(h.Docker)
+	if err := mgr.RemoveNode(context.Background(), nodeID, force); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "Node removed"})
 }

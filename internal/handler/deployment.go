@@ -2,13 +2,21 @@ package handler
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
+	"gorm.io/gorm"
 )
 
 func (h *Handler) registerDeploymentRoutes(g *echo.Group) {
 	g.GET("", h.ListDeployments)
+	g.GET("/:deploymentId", h.GetDeployment)
+	g.DELETE("/:deploymentId", h.DeleteDeployment)
+	g.POST("/:deploymentId/cancel", h.CancelDeployment)
+	g.GET("/:deploymentId/logs", h.GetDeploymentLogs)
+	g.DELETE("/all", h.DeleteAllDeployments)
 }
 
 type ListDeploymentsQuery struct {
@@ -49,4 +57,117 @@ func (h *Handler) ListDeployments(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, deployments)
+}
+
+func (h *Handler) GetDeployment(c echo.Context) error {
+	id := c.Param("deploymentId")
+	var deployment schema.Deployment
+	if err := h.DB.First(&deployment, "\"deploymentId\" = ?", id).Error; err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Deployment not found")
+	}
+	return c.JSON(http.StatusOK, deployment)
+}
+
+func (h *Handler) DeleteDeployment(c echo.Context) error {
+	id := c.Param("deploymentId")
+
+	var deployment schema.Deployment
+	if err := h.DB.First(&deployment, "\"deploymentId\" = ?", id).Error; err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Deployment not found")
+	}
+
+	// Remove log file if it exists
+	if deployment.LogPath != "" {
+		os.Remove(deployment.LogPath)
+	}
+
+	if err := h.DB.Delete(&deployment).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment deleted"})
+}
+
+type DeleteAllDeploymentsRequest struct {
+	ID   string `json:"id" validate:"required"`
+	Type string `json:"type" validate:"required"`
+}
+
+func (h *Handler) DeleteAllDeployments(c echo.Context) error {
+	var req DeleteAllDeploymentsRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	// Find all deployments for the given resource
+	var deployments []schema.Deployment
+	var query *gorm.DB = h.DB.DB
+
+	switch req.Type {
+	case "application":
+		query = query.Where("\"applicationId\" = ?", req.ID)
+	case "compose":
+		query = query.Where("\"composeId\" = ?", req.ID)
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid type")
+	}
+
+	if err := query.Find(&deployments).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	// Remove log files
+	for _, d := range deployments {
+		if d.LogPath != "" {
+			os.Remove(d.LogPath)
+		}
+	}
+
+	// Delete records
+	if err := query.Delete(&schema.Deployment{}).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "All deployments deleted"})
+}
+
+func (h *Handler) CancelDeployment(c echo.Context) error {
+	id := c.Param("deploymentId")
+
+	var deployment schema.Deployment
+	if err := h.DB.First(&deployment, "\"deploymentId\" = ?", id).Error; err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Deployment not found")
+	}
+
+	if deployment.Status == nil || *deployment.Status != schema.DeploymentStatusRunning {
+		return echo.NewHTTPError(http.StatusBadRequest, "Deployment is not running")
+	}
+
+	if err := h.DB.Model(&deployment).Update("status", schema.DeploymentStatusCancelled).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment cancelled"})
+}
+
+func (h *Handler) GetDeploymentLogs(c echo.Context) error {
+	id := c.Param("deploymentId")
+
+	var deployment schema.Deployment
+	if err := h.DB.First(&deployment, "\"deploymentId\" = ?", id).Error; err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Deployment not found")
+	}
+
+	logPath := deployment.LogPath
+	if logPath == "" {
+		// Try default log path
+		logPath = filepath.Join("/etc/dokploy/logs", deployment.DeploymentID+".log")
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return c.JSON(http.StatusOK, map[string]string{"logs": ""})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"logs": string(data)})
 }

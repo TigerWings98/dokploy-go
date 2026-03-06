@@ -110,6 +110,9 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 	// Environment routes
 	h.registerEnvironmentRoutes(api.Group("/environment"))
+
+	// Webhook routes (public, no auth)
+	h.registerWebhookRoutes(e)
 }
 
 func (h *Handler) HealthCheck(c echo.Context) error {

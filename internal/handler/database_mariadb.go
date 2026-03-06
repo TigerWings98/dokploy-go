@@ -16,6 +16,13 @@ func (h *Handler) registerMariaDBRoutes(g *echo.Group) {
 	g.DELETE("/:mariadbId", h.DeleteMariaDB)
 	g.POST("/:mariadbId/deploy", h.DeployMariaDB)
 	g.POST("/:mariadbId/stop", h.StopMariaDB)
+	g.POST("/:mariadbId/start", h.StartMariaDB)
+	g.POST("/:mariadbId/reload", h.ReloadMariaDB)
+	g.POST("/:mariadbId/rebuild", h.RebuildMariaDB)
+	g.POST("/:mariadbId/change-status", h.ChangeMariaDBStatus)
+	g.POST("/:mariadbId/save-external-port", h.SaveMariaDBExternalPort)
+	g.POST("/:mariadbId/save-environment", h.SaveMariaDBEnvironment)
+	g.POST("/:mariadbId/move", h.MoveMariaDB)
 }
 
 type CreateMariaDBRequest struct {
@@ -147,4 +154,26 @@ func (h *Handler) StopMariaDB(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+}
+
+func (h *Handler) StartMariaDB(c echo.Context) error {
+	return h.dbStart(c, "mariadb", "mariadbId", "mariadbId")
+}
+func (h *Handler) ReloadMariaDB(c echo.Context) error {
+	return h.dbReload(c, "mariadb", "mariadbId", "mariadbId")
+}
+func (h *Handler) RebuildMariaDB(c echo.Context) error {
+	return h.dbRebuild(c, "mariadb", "mariadbId")
+}
+func (h *Handler) ChangeMariaDBStatus(c echo.Context) error {
+	return h.dbChangeStatus(c, "mariadb", "mariadbId", "mariadbId")
+}
+func (h *Handler) SaveMariaDBExternalPort(c echo.Context) error {
+	return h.dbSaveExternalPort(c, "mariadb", "mariadbId", "mariadbId", "mariadb")
+}
+func (h *Handler) SaveMariaDBEnvironment(c echo.Context) error {
+	return h.dbSaveEnvironment(c, "mariadb", "mariadbId", "mariadbId", "mariadb")
+}
+func (h *Handler) MoveMariaDB(c echo.Context) error {
+	return h.dbMove(c, "mariadb", "mariadbId", "mariadbId", "mariadb")
 }

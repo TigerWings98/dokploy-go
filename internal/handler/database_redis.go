@@ -16,6 +16,13 @@ func (h *Handler) registerRedisRoutes(g *echo.Group) {
 	g.DELETE("/:redisId", h.DeleteRedis)
 	g.POST("/:redisId/deploy", h.DeployRedis)
 	g.POST("/:redisId/stop", h.StopRedis)
+	g.POST("/:redisId/start", h.StartRedis)
+	g.POST("/:redisId/reload", h.ReloadRedis)
+	g.POST("/:redisId/rebuild", h.RebuildRedis)
+	g.POST("/:redisId/change-status", h.ChangeRedisStatus)
+	g.POST("/:redisId/save-external-port", h.SaveRedisExternalPort)
+	g.POST("/:redisId/save-environment", h.SaveRedisEnvironment)
+	g.POST("/:redisId/move", h.MoveRedis)
 }
 
 type CreateRedisRequest struct {
@@ -141,4 +148,26 @@ func (h *Handler) StopRedis(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+}
+
+func (h *Handler) StartRedis(c echo.Context) error {
+	return h.dbStart(c, "redis", "redisId", "redisId")
+}
+func (h *Handler) ReloadRedis(c echo.Context) error {
+	return h.dbReload(c, "redis", "redisId", "redisId")
+}
+func (h *Handler) RebuildRedis(c echo.Context) error {
+	return h.dbRebuild(c, "redis", "redisId")
+}
+func (h *Handler) ChangeRedisStatus(c echo.Context) error {
+	return h.dbChangeStatus(c, "redis", "redisId", "redisId")
+}
+func (h *Handler) SaveRedisExternalPort(c echo.Context) error {
+	return h.dbSaveExternalPort(c, "redis", "redisId", "redisId", "redis")
+}
+func (h *Handler) SaveRedisEnvironment(c echo.Context) error {
+	return h.dbSaveEnvironment(c, "redis", "redisId", "redisId", "redis")
+}
+func (h *Handler) MoveRedis(c echo.Context) error {
+	return h.dbMove(c, "redis", "redisId", "redisId", "redis")
 }

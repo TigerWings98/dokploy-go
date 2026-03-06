@@ -16,6 +16,13 @@ func (h *Handler) registerMySQLRoutes(g *echo.Group) {
 	g.DELETE("/:mysqlId", h.DeleteMySQL)
 	g.POST("/:mysqlId/deploy", h.DeployMySQL)
 	g.POST("/:mysqlId/stop", h.StopMySQL)
+	g.POST("/:mysqlId/start", h.StartMySQL)
+	g.POST("/:mysqlId/reload", h.ReloadMySQL)
+	g.POST("/:mysqlId/rebuild", h.RebuildMySQL)
+	g.POST("/:mysqlId/change-status", h.ChangeMySQLStatus)
+	g.POST("/:mysqlId/save-external-port", h.SaveMySQLExternalPort)
+	g.POST("/:mysqlId/save-environment", h.SaveMySQLEnvironment)
+	g.POST("/:mysqlId/move", h.MoveMySQL)
 }
 
 type CreateMySQLRequest struct {
@@ -147,4 +154,26 @@ func (h *Handler) StopMySQL(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+}
+
+func (h *Handler) StartMySQL(c echo.Context) error {
+	return h.dbStart(c, "mysql", "mysqlId", "mysqlId")
+}
+func (h *Handler) ReloadMySQL(c echo.Context) error {
+	return h.dbReload(c, "mysql", "mysqlId", "mysqlId")
+}
+func (h *Handler) RebuildMySQL(c echo.Context) error {
+	return h.dbRebuild(c, "mysql", "mysqlId")
+}
+func (h *Handler) ChangeMySQLStatus(c echo.Context) error {
+	return h.dbChangeStatus(c, "mysql", "mysqlId", "mysqlId")
+}
+func (h *Handler) SaveMySQLExternalPort(c echo.Context) error {
+	return h.dbSaveExternalPort(c, "mysql", "mysqlId", "mysqlId", "mysql")
+}
+func (h *Handler) SaveMySQLEnvironment(c echo.Context) error {
+	return h.dbSaveEnvironment(c, "mysql", "mysqlId", "mysqlId", "mysql")
+}
+func (h *Handler) MoveMySQL(c echo.Context) error {
+	return h.dbMove(c, "mysql", "mysqlId", "mysqlId", "mysql")
 }

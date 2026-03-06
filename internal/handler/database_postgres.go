@@ -16,6 +16,13 @@ func (h *Handler) registerPostgresRoutes(g *echo.Group) {
 	g.DELETE("/:postgresId", h.DeletePostgres)
 	g.POST("/:postgresId/deploy", h.DeployPostgres)
 	g.POST("/:postgresId/stop", h.StopPostgres)
+	g.POST("/:postgresId/start", h.StartPostgres)
+	g.POST("/:postgresId/reload", h.ReloadPostgres)
+	g.POST("/:postgresId/rebuild", h.RebuildPostgres)
+	g.POST("/:postgresId/change-status", h.ChangePostgresStatus)
+	g.POST("/:postgresId/save-external-port", h.SavePostgresExternalPort)
+	g.POST("/:postgresId/save-environment", h.SavePostgresEnvironment)
+	g.POST("/:postgresId/move", h.MovePostgres)
 }
 
 type CreatePostgresRequest struct {
@@ -145,4 +152,26 @@ func (h *Handler) StopPostgres(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+}
+
+func (h *Handler) StartPostgres(c echo.Context) error {
+	return h.dbStart(c, "postgres", "postgresId", "postgresId")
+}
+func (h *Handler) ReloadPostgres(c echo.Context) error {
+	return h.dbReload(c, "postgres", "postgresId", "postgresId")
+}
+func (h *Handler) RebuildPostgres(c echo.Context) error {
+	return h.dbRebuild(c, "postgres", "postgresId")
+}
+func (h *Handler) ChangePostgresStatus(c echo.Context) error {
+	return h.dbChangeStatus(c, "postgres", "postgresId", "postgresId")
+}
+func (h *Handler) SavePostgresExternalPort(c echo.Context) error {
+	return h.dbSaveExternalPort(c, "postgres", "postgresId", "postgresId", "postgres")
+}
+func (h *Handler) SavePostgresEnvironment(c echo.Context) error {
+	return h.dbSaveEnvironment(c, "postgres", "postgresId", "postgresId", "postgres")
+}
+func (h *Handler) MovePostgres(c echo.Context) error {
+	return h.dbMove(c, "postgres", "postgresId", "postgresId", "postgres")
 }

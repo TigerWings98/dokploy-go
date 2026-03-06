@@ -16,6 +16,13 @@ func (h *Handler) registerMongoRoutes(g *echo.Group) {
 	g.DELETE("/:mongoId", h.DeleteMongo)
 	g.POST("/:mongoId/deploy", h.DeployMongo)
 	g.POST("/:mongoId/stop", h.StopMongo)
+	g.POST("/:mongoId/start", h.StartMongo)
+	g.POST("/:mongoId/reload", h.ReloadMongo)
+	g.POST("/:mongoId/rebuild", h.RebuildMongo)
+	g.POST("/:mongoId/change-status", h.ChangeMongoStatus)
+	g.POST("/:mongoId/save-external-port", h.SaveMongoExternalPort)
+	g.POST("/:mongoId/save-environment", h.SaveMongoEnvironment)
+	g.POST("/:mongoId/move", h.MoveMongo)
 }
 
 type CreateMongoRequest struct {
@@ -143,4 +150,26 @@ func (h *Handler) StopMongo(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+}
+
+func (h *Handler) StartMongo(c echo.Context) error {
+	return h.dbStart(c, "mongo", "mongoId", "mongoId")
+}
+func (h *Handler) ReloadMongo(c echo.Context) error {
+	return h.dbReload(c, "mongo", "mongoId", "mongoId")
+}
+func (h *Handler) RebuildMongo(c echo.Context) error {
+	return h.dbRebuild(c, "mongo", "mongoId")
+}
+func (h *Handler) ChangeMongoStatus(c echo.Context) error {
+	return h.dbChangeStatus(c, "mongo", "mongoId", "mongoId")
+}
+func (h *Handler) SaveMongoExternalPort(c echo.Context) error {
+	return h.dbSaveExternalPort(c, "mongo", "mongoId", "mongoId", "mongo")
+}
+func (h *Handler) SaveMongoEnvironment(c echo.Context) error {
+	return h.dbSaveEnvironment(c, "mongo", "mongoId", "mongoId", "mongo")
+}
+func (h *Handler) MoveMongo(c echo.Context) error {
+	return h.dbMove(c, "mongo", "mongoId", "mongoId", "mongo")
 }

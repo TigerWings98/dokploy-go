@@ -62,6 +62,11 @@ func WithHost(h string) ClientOption {
 	return func(o *clientOptions) { o.host = h }
 }
 
+// DockerClient returns the underlying Docker SDK client.
+func (c *Client) DockerClient() *client.Client {
+	return c.cli
+}
+
 // Close closes the Docker client.
 func (c *Client) Close() error {
 	return c.cli.Close()

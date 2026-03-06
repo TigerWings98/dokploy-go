@@ -1,0 +1,96 @@
+package schema
+
+import (
+	"time"
+
+	gonanoid "github.com/matoous/go-nanoid/v2"
+	"gorm.io/gorm"
+)
+
+// PreviewDeployment represents the preview_deployment table.
+type PreviewDeployment struct {
+	PreviewDeploymentID string            `gorm:"column:previewDeploymentId;primaryKey;type:text" json:"previewDeploymentId"`
+	AppName             string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	PullRequestNumber   int               `gorm:"column:pullRequestNumber;not null" json:"pullRequestNumber"`
+	PullRequestURL      *string           `gorm:"column:pullRequestUrl;type:text" json:"pullRequestUrl"`
+	PullRequestTitle    *string           `gorm:"column:pullRequestTitle;type:text" json:"pullRequestTitle"`
+	PullRequestBranch   *string           `gorm:"column:pullRequestBranch;type:text" json:"pullRequestBranch"`
+	PreviewStatus       ApplicationStatus `gorm:"column:previewStatus;type:text;not null;default:'idle'" json:"previewStatus"`
+	CreatedAt           string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	ExpiresAt           *string           `gorm:"column:expiresAt;type:text" json:"expiresAt"`
+	ApplicationID       string            `gorm:"column:applicationId;type:text;not null" json:"applicationId"`
+
+	// Relations
+	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:PreviewDeploymentID" json:"deployments,omitempty"`
+	Domains     []Domain     `gorm:"foreignKey:PreviewDeploymentID" json:"domains,omitempty"`
+}
+
+func (PreviewDeployment) TableName() string { return "preview_deployment" }
+
+func (p *PreviewDeployment) BeforeCreate(tx *gorm.DB) error {
+	if p.PreviewDeploymentID == "" {
+		p.PreviewDeploymentID, _ = gonanoid.New()
+	}
+	if p.AppName == "" {
+		p.AppName = GenerateAppName("preview")
+	}
+	if p.CreatedAt == "" {
+		p.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
+// Rollback represents the rollback table.
+type Rollback struct {
+	RollbackID    string `gorm:"column:rollbackId;primaryKey;type:text" json:"rollbackId"`
+	DockerImage   string `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
+	CreatedAt     string `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	ApplicationID string `gorm:"column:applicationId;type:text;not null" json:"applicationId"`
+	DeploymentID  string `gorm:"column:deploymentId;type:text" json:"deploymentId"`
+
+	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
+}
+
+func (Rollback) TableName() string { return "rollback" }
+
+func (r *Rollback) BeforeCreate(tx *gorm.DB) error {
+	if r.RollbackID == "" {
+		r.RollbackID, _ = gonanoid.New()
+	}
+	if r.CreatedAt == "" {
+		r.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
+// Schedule represents the schedule table.
+type Schedule struct {
+	ScheduleID string       `gorm:"column:scheduleId;primaryKey;type:text" json:"scheduleId"`
+	Name       string       `gorm:"column:name;type:text;not null" json:"name"`
+	CronExpr   string       `gorm:"column:cronExpr;type:text;not null" json:"cronExpr"`
+	Command    string       `gorm:"column:command;type:text;not null" json:"command"`
+	Enabled    bool         `gorm:"column:enabled;not null;default:true" json:"enabled"`
+	Type       ScheduleType `gorm:"column:type;type:text;not null" json:"type"`
+	CreatedAt  string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	ApplicationID *string   `gorm:"column:applicationId;type:text" json:"applicationId"`
+	ComposeID  *string      `gorm:"column:composeId;type:text" json:"composeId"`
+	ServerID   *string      `gorm:"column:serverId;type:text" json:"serverId"`
+
+	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:ScheduleID" json:"deployments,omitempty"`
+}
+
+func (Schedule) TableName() string { return "schedule" }
+
+func (s *Schedule) BeforeCreate(tx *gorm.DB) error {
+	if s.ScheduleID == "" {
+		s.ScheduleID, _ = gonanoid.New()
+	}
+	if s.CreatedAt == "" {
+		s.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}

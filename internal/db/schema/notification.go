@@ -23,6 +23,7 @@ type Notification struct {
 	DokployRestart    *bool `gorm:"column:dokployRestart" json:"dokployRestart"`
 	DockerCleanup     *bool `gorm:"column:dockerCleanup" json:"dockerCleanup"`
 	ServerThreshold   *bool `gorm:"column:serverThreshold" json:"serverThreshold"`
+	VolumeBackup      *bool `gorm:"column:volumeBackup" json:"volumeBackup"`
 
 	// Slack
 	SlackWebhookURL *string `gorm:"column:slackWebhookUrl;type:text" json:"slackWebhookUrl"`

@@ -23,14 +23,16 @@ const (
 	EventDokployRestart  EventType = "dokploy_restart"
 	EventDockerCleanup   EventType = "docker_cleanup"
 	EventServerThreshold EventType = "server_threshold"
+	EventVolumeBackup    EventType = "volume_backup"
 )
 
 // NotificationPayload is the data sent to notification channels.
 type NotificationPayload struct {
-	Event   EventType `json:"event"`
-	Title   string    `json:"title"`
-	Message string    `json:"message"`
-	AppName string    `json:"appName,omitempty"`
+	Event    EventType `json:"event"`
+	Title    string    `json:"title"`
+	Message  string    `json:"message"`
+	AppName  string    `json:"appName,omitempty"`
+	HTMLBody string    `json:"-"` // HTML content for email notifications
 }
 
 // Notifier handles sending notifications.
@@ -101,6 +103,8 @@ func shouldSend(notif *schema.Notification, event EventType) bool {
 		return notif.DockerCleanup != nil && *notif.DockerCleanup
 	case EventServerThreshold:
 		return notif.ServerThreshold != nil && *notif.ServerThreshold
+	case EventVolumeBackup:
+		return notif.VolumeBackup != nil && *notif.VolumeBackup
 	}
 	return false
 }
@@ -194,11 +198,17 @@ func sendEmail(notif *schema.Notification, payload NotificationPayload) error {
 
 	subject := payload.Title
 	body := payload.Message
+	contentType := "text/plain"
+	if payload.HTMLBody != "" {
+		body = payload.HTMLBody
+		contentType = "text/html"
+	}
 
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
+	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: %s; charset=UTF-8\r\n\r\n%s",
 		*notif.SmtpFromAddress,
 		strings.Join(notif.SmtpToAddress, ","),
 		subject,
+		contentType,
 		body,
 	)
 

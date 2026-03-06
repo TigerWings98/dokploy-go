@@ -2,9 +2,11 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/traefik"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -42,7 +44,7 @@ func (h *Handler) CreateRedirect(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Update Traefik redirect middleware
+	h.syncRedirectsTraefik(r.ApplicationID, r.ComposeID)
 
 	return c.JSON(http.StatusCreated, r)
 }
@@ -81,7 +83,7 @@ func (h *Handler) UpdateRedirect(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Update Traefik redirect middleware
+	h.syncRedirectsTraefik(r.ApplicationID, r.ComposeID)
 
 	return c.JSON(http.StatusOK, r)
 }
@@ -89,15 +91,63 @@ func (h *Handler) UpdateRedirect(c echo.Context) error {
 func (h *Handler) DeleteRedirect(c echo.Context) error {
 	id := c.Param("redirectId")
 
-	result := h.DB.Delete(&schema.Redirect{}, "\"redirectId\" = ?", id)
-	if result.Error != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, result.Error.Error())
-	}
-	if result.RowsAffected == 0 {
-		return echo.NewHTTPError(http.StatusNotFound, "Redirect not found")
+	var r schema.Redirect
+	if err := h.DB.First(&r, "\"redirectId\" = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Redirect not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Update Traefik redirect middleware
+	appID := r.ApplicationID
+	composeID := r.ComposeID
+
+	if err := h.DB.Delete(&r).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	h.syncRedirectsTraefik(appID, composeID)
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// syncRedirectsTraefik loads all redirects for an app/compose and updates Traefik.
+func (h *Handler) syncRedirectsTraefik(applicationID, composeID *string) {
+	if h.Traefik == nil {
+		return
+	}
+
+	var appName string
+	var redirects []schema.Redirect
+
+	if applicationID != nil {
+		var app schema.Application
+		if err := h.DB.First(&app, "\"applicationId\" = ?", *applicationID).Error; err == nil {
+			appName = app.AppName
+		}
+		h.DB.Where("\"applicationId\" = ?", *applicationID).Find(&redirects)
+	} else if composeID != nil {
+		var compose schema.Compose
+		if err := h.DB.First(&compose, "\"composeId\" = ?", *composeID).Error; err == nil {
+			appName = compose.AppName
+		}
+		h.DB.Where("\"composeId\" = ?", *composeID).Find(&redirects)
+	}
+
+	if appName == "" {
+		return
+	}
+
+	entries := make([]traefik.RedirectEntry, len(redirects))
+	for i, r := range redirects {
+		entries[i] = traefik.RedirectEntry{
+			Regex:       r.Regex,
+			Replacement: r.Replacement,
+			Permanent:   r.Permanent,
+		}
+	}
+
+	if err := h.Traefik.UpdateRedirects(appName, entries); err != nil {
+		log.Printf("Failed to update traefik redirects for %s: %v", appName, err)
+	}
 }

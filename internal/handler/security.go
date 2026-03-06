@@ -2,6 +2,8 @@ package handler
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -40,7 +42,7 @@ func (h *Handler) CreateSecurity(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Update Traefik basic auth middleware
+	h.syncBasicAuthTraefik(s.ApplicationID, s.ComposeID)
 
 	return c.JSON(http.StatusCreated, s)
 }
@@ -79,7 +81,7 @@ func (h *Handler) UpdateSecurity(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Update Traefik basic auth middleware
+	h.syncBasicAuthTraefik(s.ApplicationID, s.ComposeID)
 
 	return c.JSON(http.StatusOK, s)
 }
@@ -87,15 +89,59 @@ func (h *Handler) UpdateSecurity(c echo.Context) error {
 func (h *Handler) DeleteSecurity(c echo.Context) error {
 	id := c.Param("securityId")
 
-	result := h.DB.Delete(&schema.Security{}, "\"securityId\" = ?", id)
-	if result.Error != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, result.Error.Error())
-	}
-	if result.RowsAffected == 0 {
-		return echo.NewHTTPError(http.StatusNotFound, "Security not found")
+	var s schema.Security
+	if err := h.DB.First(&s, "\"securityId\" = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Security not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Update Traefik basic auth middleware
+	appID := s.ApplicationID
+	composeID := s.ComposeID
+
+	if err := h.DB.Delete(&s).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	h.syncBasicAuthTraefik(appID, composeID)
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// syncBasicAuthTraefik loads all security entries for an app/compose and updates Traefik.
+func (h *Handler) syncBasicAuthTraefik(applicationID, composeID *string) {
+	if h.Traefik == nil {
+		return
+	}
+
+	var appName string
+	var securities []schema.Security
+
+	if applicationID != nil {
+		var app schema.Application
+		if err := h.DB.First(&app, "\"applicationId\" = ?", *applicationID).Error; err == nil {
+			appName = app.AppName
+		}
+		h.DB.Where("\"applicationId\" = ?", *applicationID).Find(&securities)
+	} else if composeID != nil {
+		var compose schema.Compose
+		if err := h.DB.First(&compose, "\"composeId\" = ?", *composeID).Error; err == nil {
+			appName = compose.AppName
+		}
+		h.DB.Where("\"composeId\" = ?", *composeID).Find(&securities)
+	}
+
+	if appName == "" {
+		return
+	}
+
+	credentials := make([]string, len(securities))
+	for i, s := range securities {
+		credentials[i] = fmt.Sprintf("%s:%s", s.Username, s.Password)
+	}
+
+	if err := h.Traefik.UpdateBasicAuth(appName, credentials); err != nil {
+		log.Printf("Failed to update traefik basic auth for %s: %v", appName, err)
+	}
 }

@@ -2,7 +2,11 @@ package handler
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
@@ -54,7 +58,7 @@ func (h *Handler) CreateCertificate(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Write cert files to disk for Traefik
+	h.writeCertFiles(cert)
 
 	return c.JSON(http.StatusCreated, cert)
 }
@@ -95,15 +99,70 @@ func (h *Handler) ListCertificates(c echo.Context) error {
 func (h *Handler) DeleteCertificate(c echo.Context) error {
 	id := c.Param("certificateId")
 
-	result := h.DB.Delete(&schema.Certificate{}, "\"certificateId\" = ?", id)
-	if result.Error != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, result.Error.Error())
-	}
-	if result.RowsAffected == 0 {
-		return echo.NewHTTPError(http.StatusNotFound, "Certificate not found")
+	var cert schema.Certificate
+	if err := h.DB.First(&cert, "\"certificateId\" = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Certificate not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// TODO: Remove cert files from disk
+	if err := h.DB.Delete(&cert).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	h.removeCertFiles(cert.CertificateID)
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) writeCertFiles(cert *schema.Certificate) {
+	if h.CertsPath == "" {
+		return
+	}
+
+	certDir := filepath.Join(h.CertsPath, cert.CertificateID)
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		log.Printf("Failed to create cert directory %s: %v", certDir, err)
+		return
+	}
+
+	certFile := filepath.Join(certDir, "cert.pem")
+	keyFile := filepath.Join(certDir, "key.pem")
+
+	if err := os.WriteFile(certFile, []byte(cert.CertificateData), 0644); err != nil {
+		log.Printf("Failed to write cert file: %v", err)
+		return
+	}
+	if err := os.WriteFile(keyFile, []byte(cert.PrivateKey), 0600); err != nil {
+		log.Printf("Failed to write key file: %v", err)
+		return
+	}
+
+	// Write Traefik TLS config pointing to these files
+	if h.Traefik != nil {
+		traefikConfig := fmt.Sprintf(`tls:
+  certificates:
+    - certFile: %s
+      keyFile: %s
+`, certFile, keyFile)
+		configFile := filepath.Join(h.CertsPath, cert.CertificateID+".yaml")
+		if err := os.WriteFile(configFile, []byte(traefikConfig), 0644); err != nil {
+			log.Printf("Failed to write traefik cert config: %v", err)
+		}
+	}
+}
+
+func (h *Handler) removeCertFiles(certID string) {
+	if h.CertsPath == "" {
+		return
+	}
+
+	certDir := filepath.Join(h.CertsPath, certID)
+	if err := os.RemoveAll(certDir); err != nil {
+		log.Printf("Failed to remove cert directory %s: %v", certDir, err)
+	}
+
+	configFile := filepath.Join(h.CertsPath, certID+".yaml")
+	os.Remove(configFile)
 }

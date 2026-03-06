@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
@@ -250,15 +251,24 @@ func (h *Handler) buildErrorResult(err error) interface{} {
 func (h *Handler) buildRegistry() procedureRegistry {
 	r := make(procedureRegistry)
 
-	// Helper to get default org member
+	// Helper to get default org member.
+	// Mirrors the original Dokploy logic:
+	// 1. If session has activeOrganizationId, filter by it
+	// 2. Otherwise, order by is_default DESC, created_at DESC and take first
 	getDefaultMember := func(c echo.Context) (*schema.Member, error) {
 		user := mw.GetUser(c)
 		if user == nil {
 			return nil, &trpcErr{"Authentication required", "UNAUTHORIZED", 401}
 		}
+		session := mw.GetSession(c)
+
 		var member schema.Member
-		if err := h.DB.Where("user_id = ? AND is_default = ?", user.ID, true).First(&member).Error; err != nil {
-			return nil, &trpcErr{"No default organization found", "BAD_REQUEST", 400}
+		q := h.DB.Where("user_id = ?", user.ID)
+		if session != nil && session.ActiveOrganizationID != nil && *session.ActiveOrganizationID != "" {
+			q = q.Where("organization_id = ?", *session.ActiveOrganizationID)
+		}
+		if err := q.Order("is_default DESC, created_at DESC").First(&member).Error; err != nil {
+			return nil, &trpcErr{"No organization membership found", "BAD_REQUEST", 400}
 		}
 		return &member, nil
 	}
@@ -272,10 +282,33 @@ func (h *Handler) buildRegistry() procedureRegistry {
 		var projects []schema.Project
 		if err := h.DB.
 			Preload("Environments").
+			Preload("Environments.Applications").
+			Preload("Environments.Postgres").
+			Preload("Environments.MySQL").
+			Preload("Environments.MariaDB").
+			Preload("Environments.Mongo").
+			Preload("Environments.Redis").
+			Preload("Environments.Compose").
 			Where("\"organizationId\" = ?", member.OrganizationID).
 			Order("\"createdAt\" DESC").
 			Find(&projects).Error; err != nil {
 			return nil, err
+		}
+		// Ensure nil slices become empty arrays in JSON
+		for i := range projects {
+			if projects[i].Environments == nil {
+				projects[i].Environments = []schema.Environment{}
+			}
+			for j := range projects[i].Environments {
+				e := &projects[i].Environments[j]
+				if e.Applications == nil { e.Applications = []schema.Application{} }
+				if e.Postgres == nil { e.Postgres = []schema.Postgres{} }
+				if e.MySQL == nil { e.MySQL = []schema.MySQL{} }
+				if e.MariaDB == nil { e.MariaDB = []schema.MariaDB{} }
+				if e.Mongo == nil { e.Mongo = []schema.Mongo{} }
+				if e.Redis == nil { e.Redis = []schema.Redis{} }
+				if e.Compose == nil { e.Compose = []schema.Compose{} }
+			}
 		}
 		return projects, nil
 	}
@@ -376,7 +409,7 @@ func (h *Handler) buildRegistry() procedureRegistry {
 	h.registerSettingsTRPC(r)
 
 	// ===================== USER =====================
-	h.registerUserTRPC(r)
+	h.registerUserTRPC(r, getDefaultMember)
 
 	// ===================== NOTIFICATION =====================
 	h.registerNotificationTRPC(r)
@@ -607,6 +640,19 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 			}
 			return nil, err
 		}
+		// Load environment with project
+		if compose.EnvironmentID != "" {
+			var env schema.Environment
+			if err := h.DB.First(&env, "\"environmentId\" = ?", compose.EnvironmentID).Error; err == nil {
+				if env.ProjectID != "" {
+					var proj schema.Project
+					if err := h.DB.First(&proj, "\"projectId\" = ?", env.ProjectID).Error; err == nil {
+						env.Project = &proj
+					}
+				}
+				compose.Environment = &env
+			}
+		}
 		return compose, nil
 	}
 
@@ -735,6 +781,38 @@ func (h *Handler) registerDeploymentTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		h.DB.Delete(&schema.Deployment{}, "\"deploymentId\" = ?", in.DeploymentID)
 		return true, nil
+	}
+
+	r["deployment.allByType"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		}
+		json.Unmarshal(input, &in)
+
+		// Map type to column name
+		colMap := map[string]string{
+			"application":       "applicationId",
+			"compose":           "composeId",
+			"server":            "serverId",
+			"schedule":          "scheduleId",
+			"previewDeployment": "previewDeploymentId",
+			"backup":            "backupId",
+			"volumeBackup":      "volumeBackupId",
+		}
+		col, ok := colMap[in.Type]
+		if !ok {
+			return nil, &trpcErr{"Invalid deployment type", "BAD_REQUEST", 400}
+		}
+
+		var deployments []schema.Deployment
+		h.DB.Where(fmt.Sprintf("\"%s\" = ?", col), in.ID).
+			Order("\"createdAt\" DESC").
+			Find(&deployments)
+		if deployments == nil {
+			deployments = []schema.Deployment{}
+		}
+		return deployments, nil
 	}
 }
 
@@ -1011,12 +1089,87 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 		return false, nil
 	}
 
+	r["settings.haveTraefikDashboardPortEnabled"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// TODO: check actual traefik config
+		return false, nil
+	}
+
+	r["settings.getReleaseTag"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return map[string]string{"releaseTag": "canary"}, nil
+	}
+
 	r["settings.getDokployVersion"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return "canary", nil
 	}
 
 	r["settings.health"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return map[string]string{"status": "ok"}, nil
+	}
+
+	r["settings.getUpdateData"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		defaultResult := map[string]interface{}{
+			"updateAvailable": false,
+			"latestVersion":   nil,
+		}
+
+		// Fetch tags from Docker Hub
+		type dockerTag struct {
+			Digest string `json:"digest"`
+			Name   string `json:"name"`
+		}
+		type dockerResp struct {
+			Next    *string     `json:"next"`
+			Results []dockerTag `json:"results"`
+		}
+
+		var allTags []dockerTag
+		apiURL := "https://hub.docker.com/v2/repositories/dokploy/dokploy/tags?page_size=100"
+		client := &http.Client{Timeout: 10 * time.Second}
+
+		for apiURL != "" {
+			resp, err := client.Get(apiURL)
+			if err != nil {
+				return defaultResult, nil
+			}
+			var data dockerResp
+			json.NewDecoder(resp.Body).Decode(&data)
+			resp.Body.Close()
+			allTags = append(allTags, data.Results...)
+			if data.Next != nil {
+				apiURL = *data.Next
+			} else {
+				apiURL = ""
+			}
+		}
+
+		// Find "latest" tag digest
+		var latestDigest string
+		for _, t := range allTags {
+			if t.Name == "latest" {
+				latestDigest = t.Digest
+				break
+			}
+		}
+		if latestDigest == "" {
+			return defaultResult, nil
+		}
+
+		// Find versioned tag with same digest as "latest"
+		var latestVersion string
+		for _, t := range allTags {
+			if t.Digest == latestDigest && len(t.Name) > 0 && t.Name[0] == 'v' {
+				latestVersion = t.Name
+				break
+			}
+		}
+		if latestVersion == "" {
+			return defaultResult, nil
+		}
+
+		return map[string]interface{}{
+			"updateAvailable": true,
+			"latestVersion":   latestVersion,
+		}, nil
 	}
 
 	r["settings.getIp"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -1153,19 +1306,19 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 }
 
-func (h *Handler) registerUserTRPC(r procedureRegistry) {
-	r["user.get"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		user := mw.GetUser(c)
-		if user == nil {
-			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
-		}
-		return user, nil
-	}
-
+func (h *Handler) registerUserTRPC(r procedureRegistry, getDefaultMember func(echo.Context) (*schema.Member, error)) {
 	r["user.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		var users []schema.User
-		h.DB.Find(&users)
-		return users, nil
+		// Returns members with preloaded user (matching original Dokploy)
+		member, err := getDefaultMember(c)
+		if err != nil {
+			return []interface{}{}, nil
+		}
+		var members []schema.Member
+		h.DB.Preload("User").
+			Where("organization_id = ?", member.OrganizationID).
+			Order("created_at ASC").
+			Find(&members)
+		return members, nil
 	}
 
 	r["user.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -1184,6 +1337,87 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 			return false, nil
 		}
 		return user.Role == "admin", nil
+	}
+
+	// user.get returns member with nested user object (matching original Dokploy structure)
+	// Frontend accesses: data.user.twoFactorEnabled, data.role, data.canCreateProjects, etc.
+	r["user.get"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		member, err := getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+
+		// Load user with apiKeys
+		var fullUser schema.User
+		h.DB.Preload("APIKeys").First(&fullUser, "id = ?", user.ID)
+		if fullUser.APIKeys == nil {
+			fullUser.APIKeys = []schema.APIKey{}
+		}
+
+		result := map[string]interface{}{
+			"memberId":                member.ID,
+			"userId":                  member.UserID,
+			"organizationId":          member.OrganizationID,
+			"role":                    member.Role,
+			"isDefault":               member.IsDefault,
+			"canCreateProjects":       member.CanCreateProjects,
+			"canCreateServices":       member.CanCreateServices,
+			"canDeleteProjects":       member.CanDeleteProjects,
+			"canDeleteServices":       member.CanDeleteServices,
+			"canAccessToDocker":       member.CanAccessToDocker,
+			"canAccessToAPI":          member.CanAccessToAPI,
+			"canAccessToSSHKeys":      member.CanAccessToSSHKeys,
+			"canAccessToGitProviders": member.CanAccessToGitProviders,
+			"canAccessToTraefikFiles": member.CanAccessToTraefikFiles,
+			"canDeleteEnvironments":   member.CanDeleteEnvironments,
+			"canCreateEnvironments":   member.CanCreateEnvironments,
+			"accesedProjects":         member.AccessedProjects,
+			"accesedServices":         member.AccessedServices,
+			"accessedEnvironments":    member.AccessedEnvironments,
+			"createdAt":               member.CreatedAt,
+			"user":                    fullUser,
+		}
+		return result, nil
+	}
+
+	r["user.getInvitations"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		var invitations []schema.Invitation
+		h.DB.Where("email = ? AND status = ?", user.Email, "pending").Find(&invitations)
+		return invitations, nil
+	}
+
+	r["server.getServerTime"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return map[string]interface{}{
+			"serverTime": time.Now().UTC().Format(time.RFC3339),
+		}, nil
+	}
+
+	r["stripe.getCurrentPlan"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// Non-cloud: no plan
+		return nil, nil
+	}
+
+	r["user.getBackups"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		// Return user with backups + apiKeys preloaded
+		var u schema.User
+		if err := h.DB.
+			Preload("APIKeys").
+			First(&u, "id = ?", user.ID).Error; err != nil {
+			return nil, &trpcErr{"User not found", "NOT_FOUND", 404}
+		}
+		return u, nil
 	}
 }
 
@@ -1580,7 +1814,18 @@ func (h *Handler) registerSimpleCRUDTRPC(r procedureRegistry, getDefaultMember f
 		var in struct{ ProjectID string `json:"projectId"` }
 		json.Unmarshal(input, &in)
 		var envs []schema.Environment
-		h.DB.Where("\"projectId\" = ?", in.ProjectID).Find(&envs)
+		h.DB.
+			Preload("Applications").
+			Preload("Postgres").
+			Preload("MySQL").
+			Preload("MariaDB").
+			Preload("Mongo").
+			Preload("Redis").
+			Preload("Compose").
+			Where("\"projectId\" = ?", in.ProjectID).Find(&envs)
+		if envs == nil {
+			envs = []schema.Environment{}
+		}
 		return envs, nil
 	}
 
@@ -1590,9 +1835,21 @@ func (h *Handler) registerSimpleCRUDTRPC(r procedureRegistry, getDefaultMember f
 		var env schema.Environment
 		if err := h.DB.
 			Preload("Applications").
-			Preload("Composes").
+			Preload("Postgres").
+			Preload("MySQL").
+			Preload("MariaDB").
+			Preload("Mongo").
+			Preload("Redis").
+			Preload("Compose").
 			First(&env, "\"environmentId\" = ?", in.EnvironmentID).Error; err != nil {
 			return nil, &trpcErr{"Environment not found", "NOT_FOUND", 404}
+		}
+		// Manually load project since Preload may not resolve camelCase PKs correctly
+		if env.ProjectID != "" {
+			var proj schema.Project
+			if err := h.DB.First(&proj, "\"projectId\" = ?", env.ProjectID).Error; err == nil {
+				env.Project = &proj
+			}
 		}
 		return env, nil
 	}

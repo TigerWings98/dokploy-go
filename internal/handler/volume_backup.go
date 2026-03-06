@@ -18,15 +18,15 @@ func (h *Handler) registerVolumeBackupRoutes(g *echo.Group) {
 }
 
 type CreateVolumeBackupRequest struct {
-	AppName       string  `json:"appName" validate:"required"`
-	ServiceName   string  `json:"serviceName" validate:"required"`
-	ServiceType   string  `json:"serviceType" validate:"required"`
-	SourcePath    string  `json:"sourcePath" validate:"required"`
-	Schedule      string  `json:"schedule" validate:"required"`
-	Prefix        string  `json:"prefix" validate:"required"`
-	Enabled       *bool   `json:"enabled"`
-	DestinationID string  `json:"destinationId" validate:"required"`
-	ServerID      *string `json:"serverId"`
+	Name           string  `json:"name" validate:"required"`
+	VolumeName     string  `json:"volumeName" validate:"required"`
+	AppName        string  `json:"appName" validate:"required"`
+	ServiceName    *string `json:"serviceName"`
+	ServiceType    string  `json:"serviceType" validate:"required"`
+	CronExpression string  `json:"cronExpression" validate:"required"`
+	Prefix         string  `json:"prefix" validate:"required"`
+	Enabled        *bool   `json:"enabled"`
+	DestinationID  string  `json:"destinationId" validate:"required"`
 }
 
 func (h *Handler) CreateVolumeBackup(c echo.Context) error {
@@ -36,15 +36,15 @@ func (h *Handler) CreateVolumeBackup(c echo.Context) error {
 	}
 
 	vb := &schema.VolumeBackup{
-		AppName:       req.AppName,
-		ServiceName:   req.ServiceName,
-		ServiceType:   req.ServiceType,
-		SourcePath:    req.SourcePath,
-		Schedule:      req.Schedule,
-		Prefix:        req.Prefix,
-		Enabled:       req.Enabled,
-		DestinationID: req.DestinationID,
-		ServerID:      req.ServerID,
+		Name:           req.Name,
+		VolumeName:     req.VolumeName,
+		AppName:        req.AppName,
+		ServiceName:    req.ServiceName,
+		ServiceType:    req.ServiceType,
+		CronExpression: req.CronExpression,
+		Prefix:         req.Prefix,
+		Enabled:        req.Enabled,
+		DestinationID:  req.DestinationID,
 	}
 
 	if err := h.DB.Create(vb).Error; err != nil {

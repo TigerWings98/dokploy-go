@@ -76,11 +76,11 @@ func (s *Scheduler) addJob(schedule schema.Schedule) error {
 	}
 
 	sched := schedule // capture for closure
-	entryID, err := s.cron.AddFunc(sched.CronExpr, func() {
+	entryID, err := s.cron.AddFunc(sched.CronExpression, func() {
 		s.executeSchedule(sched)
 	})
 	if err != nil {
-		return fmt.Errorf("invalid cron expression %q: %w", schedule.CronExpr, err)
+		return fmt.Errorf("invalid cron expression %q: %w", schedule.CronExpression, err)
 	}
 
 	s.jobs[schedule.ScheduleID] = entryID

@@ -71,7 +71,7 @@ type Redirect struct {
 	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
 }
 
-func (Redirect) TableName() string { return "redirects" }
+func (Redirect) TableName() string { return "redirect" }
 
 func (r *Redirect) BeforeCreate(tx *gorm.DB) error {
 	if r.RedirectID == "" {

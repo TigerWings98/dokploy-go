@@ -34,3 +34,4 @@ Thumbs.db
 
 # Node.js (from original dokploy)
 node_modules/
+/server

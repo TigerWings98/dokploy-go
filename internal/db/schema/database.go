@@ -11,7 +11,7 @@ import (
 type Postgres struct {
 	PostgresID     string            `gorm:"column:postgresId;primaryKey;type:text" json:"postgresId"`
 	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:postgres_appName_unique" json:"appName"`
 	Description    *string           `gorm:"column:description;type:text" json:"description"`
 	DatabaseName   string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
 	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
@@ -55,7 +55,7 @@ func (p *Postgres) BeforeCreate(tx *gorm.DB) error {
 type MySQL struct {
 	MySQLID        string            `gorm:"column:mysqlId;primaryKey;type:text" json:"mysqlId"`
 	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:mysql_appName_unique" json:"appName"`
 	Description    *string           `gorm:"column:description;type:text" json:"description"`
 	DatabaseName   string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
 	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
@@ -99,7 +99,7 @@ func (m *MySQL) BeforeCreate(tx *gorm.DB) error {
 type MariaDB struct {
 	MariaDBID      string            `gorm:"column:mariadbId;primaryKey;type:text" json:"mariadbId"`
 	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:mariadb_appName_unique" json:"appName"`
 	Description    *string           `gorm:"column:description;type:text" json:"description"`
 	DatabaseName   string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
 	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
@@ -143,7 +143,7 @@ func (m *MariaDB) BeforeCreate(tx *gorm.DB) error {
 type Mongo struct {
 	MongoID        string            `gorm:"column:mongoId;primaryKey;type:text" json:"mongoId"`
 	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:mongo_appName_unique" json:"appName"`
 	Description    *string           `gorm:"column:description;type:text" json:"description"`
 	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
 	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
@@ -185,7 +185,7 @@ func (m *Mongo) BeforeCreate(tx *gorm.DB) error {
 type Redis struct {
 	RedisID        string            `gorm:"column:redisId;primaryKey;type:text" json:"redisId"`
 	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:redis_appName_unique" json:"appName"`
 	Description    *string           `gorm:"column:description;type:text" json:"description"`
 	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
 	DockerImage    string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
@@ -204,7 +204,6 @@ type Redis struct {
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
 	Mounts      []Mount      `gorm:"foreignKey:RedisID" json:"mounts,omitempty"`
-	Backups     []Backup     `gorm:"foreignKey:RedisID" json:"backups,omitempty"`
 }
 
 func (Redis) TableName() string { return "redis" }

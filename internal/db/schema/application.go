@@ -14,7 +14,7 @@ import (
 type Application struct {
 	ApplicationID    string            `gorm:"column:applicationId;primaryKey;type:text" json:"applicationId"`
 	Name             string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName          string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName          string            `gorm:"column:appName;type:text;not null;uniqueIndex:application_appName_unique" json:"appName"`
 	Description      *string           `gorm:"column:description;type:text" json:"description"`
 	Env              *string           `gorm:"column:env;type:text" json:"env"`
 	PreviewEnv       *string           `gorm:"column:previewEnv;type:text" json:"previewEnv"`

@@ -10,7 +10,7 @@ import (
 // PreviewDeployment represents the preview_deployment table.
 type PreviewDeployment struct {
 	PreviewDeploymentID   string            `gorm:"column:previewDeploymentId;primaryKey;type:text" json:"previewDeploymentId"`
-	AppName               string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName               string            `gorm:"column:appName;type:text;not null;uniqueIndex:preview_deployment_appName_unique" json:"appName"`
 	Branch                string            `gorm:"column:branch;type:text;not null" json:"branch"`
 	PullRequestID         string            `gorm:"column:pullRequestId;type:text;not null" json:"pullRequestId"`
 	PullRequestNumber     string            `gorm:"column:pullRequestNumber;type:text;not null" json:"pullRequestNumber"`
@@ -29,7 +29,7 @@ type PreviewDeployment struct {
 	Domains     []Domain     `gorm:"foreignKey:PreviewDeploymentID" json:"domains,omitempty"`
 }
 
-func (PreviewDeployment) TableName() string { return "preview_deployment" }
+func (PreviewDeployment) TableName() string { return "preview_deployments" }
 
 func (p *PreviewDeployment) BeforeCreate(tx *gorm.DB) error {
 	if p.PreviewDeploymentID == "" {
@@ -71,7 +71,7 @@ func (r *Rollback) BeforeCreate(tx *gorm.DB) error {
 type Schedule struct {
 	ScheduleID string       `gorm:"column:scheduleId;primaryKey;type:text" json:"scheduleId"`
 	Name       string       `gorm:"column:name;type:text;not null" json:"name"`
-	CronExpr   string       `gorm:"column:cronExpr;type:text;not null" json:"cronExpr"`
+	CronExpression string   `gorm:"column:cronExpression;type:text;not null" json:"cronExpression"`
 	Command    string       `gorm:"column:command;type:text;not null" json:"command"`
 	Enabled    bool         `gorm:"column:enabled;not null;default:true" json:"enabled"`
 	Type       ScheduleType `gorm:"column:type;type:text;not null" json:"type"`

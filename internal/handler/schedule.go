@@ -20,7 +20,7 @@ func (h *Handler) registerScheduleRoutes(g *echo.Group) {
 
 type CreateScheduleRequest struct {
 	Name          string  `json:"name" validate:"required"`
-	CronExpr      string  `json:"cronExpr" validate:"required"`
+	CronExpression      string  `json:"cronExpr" validate:"required"`
 	Command       string  `json:"command" validate:"required"`
 	Enabled       bool    `json:"enabled"`
 	Type          string  `json:"type" validate:"required"`
@@ -37,7 +37,7 @@ func (h *Handler) CreateSchedule(c echo.Context) error {
 
 	s := &schema.Schedule{
 		Name:          req.Name,
-		CronExpr:      req.CronExpr,
+		CronExpression:      req.CronExpression,
 		Command:       req.Command,
 		Enabled:       req.Enabled,
 		Type:          schema.ScheduleType(req.Type),

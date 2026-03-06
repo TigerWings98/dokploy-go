@@ -17,7 +17,7 @@ type User struct {
 	CreatedAt2               string     `gorm:"column:createdAt;type:text;not null" json:"createdAt2"`
 	CreatedAt                *time.Time `gorm:"column:created_at" json:"createdAt"`
 	TwoFactorEnabled         *bool      `gorm:"column:two_factor_enabled" json:"twoFactorEnabled"`
-	Email                    string     `gorm:"column:email;type:text;not null;uniqueIndex" json:"email"`
+	Email                    string     `gorm:"column:email;type:text;not null;uniqueIndex:user_email_unique" json:"email"`
 	EmailVerified            bool       `gorm:"column:email_verified;not null" json:"emailVerified"`
 	Image                    *string    `gorm:"column:image;type:text" json:"image"`
 	Banned                   *bool      `gorm:"column:banned" json:"banned"`
@@ -109,7 +109,7 @@ func (Verification) TableName() string { return "verification" }
 type Organization struct {
 	ID        string    `gorm:"column:id;primaryKey;type:text" json:"id"`
 	Name      string    `gorm:"column:name;type:text;not null" json:"name"`
-	Slug      *string   `gorm:"column:slug;type:text;uniqueIndex" json:"slug"`
+	Slug      *string   `gorm:"column:slug;type:text;uniqueIndex:organization_slug_unique" json:"slug"`
 	Logo      *string   `gorm:"column:logo;type:text" json:"logo"`
 	CreatedAt time.Time `gorm:"column:created_at;not null" json:"createdAt"`
 	Metadata  *string   `gorm:"column:metadata;type:text" json:"metadata"`
@@ -232,14 +232,22 @@ func (APIKey) TableName() string { return "apikey" }
 type Session struct {
 	ID        string    `gorm:"column:id;primaryKey;type:text" json:"id"`
 	ExpiresAt time.Time `gorm:"column:expires_at;not null" json:"expiresAt"`
-	Token     string    `gorm:"column:token;type:text;not null;uniqueIndex" json:"token"`
+	Token     string    `gorm:"column:token;type:text;not null;uniqueIndex:session_token_unique" json:"token"`
 	CreatedAt time.Time `gorm:"column:created_at;not null" json:"createdAt"`
 	UpdatedAt time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
-	IPAddress *string   `gorm:"column:ip_address;type:text" json:"ipAddress"`
-	UserAgent *string   `gorm:"column:user_agent;type:text" json:"userAgent"`
-	UserID    string    `gorm:"column:user_id;type:text;not null" json:"userId"`
+	IPAddress              *string `gorm:"column:ip_address;type:text" json:"ipAddress"`
+	UserAgent              *string `gorm:"column:user_agent;type:text" json:"userAgent"`
+	UserID                 string  `gorm:"column:user_id;type:text;not null" json:"userId"`
+	ActiveOrganizationID   *string `gorm:"column:active_organization_id;type:text" json:"activeOrganizationId"`
 
 	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
 }
 
 func (Session) TableName() string { return "session" }
+
+func (s *Session) BeforeCreate(tx *gorm.DB) error {
+	if s.ID == "" {
+		s.ID, _ = gonanoid.New()
+	}
+	return nil
+}

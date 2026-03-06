@@ -72,19 +72,34 @@ func (b *Backup) BeforeCreate(tx *gorm.DB) error {
 // VolumeBackup represents the volume_backup table.
 type VolumeBackup struct {
 	VolumeBackupID string  `gorm:"column:volumeBackupId;primaryKey;type:text" json:"volumeBackupId"`
-	AppName        string  `gorm:"column:appName;type:text;not null" json:"appName"`
-	ServiceName    string  `gorm:"column:serviceName;type:text;not null" json:"serviceName"`
-	ServiceType    string  `gorm:"column:serviceType;type:text;not null" json:"serviceType"`
-	SourcePath     string  `gorm:"column:sourcePath;type:text;not null" json:"sourcePath"`
-	Schedule       string  `gorm:"column:schedule;type:text;not null" json:"schedule"`
+	Name           string  `gorm:"column:name;type:text;not null" json:"name"`
+	VolumeName     string  `gorm:"column:volumeName;type:text;not null" json:"volumeName"`
 	Prefix         string  `gorm:"column:prefix;type:text;not null" json:"prefix"`
+	ServiceType    string  `gorm:"column:serviceType;type:text;not null;default:'application'" json:"serviceType"`
+	AppName        string  `gorm:"column:appName;type:text;not null" json:"appName"`
+	ServiceName    *string `gorm:"column:serviceName;type:text" json:"serviceName"`
+	TurnOff        bool    `gorm:"column:turnOff;not null;default:false" json:"turnOff"`
+	CronExpression string  `gorm:"column:cronExpression;type:text;not null" json:"cronExpression"`
+	KeepLatestCount *int   `gorm:"column:keepLatestCount" json:"keepLatestCount"`
 	Enabled        *bool   `gorm:"column:enabled" json:"enabled"`
-	DestinationID  string  `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
+	ApplicationID  *string `gorm:"column:applicationId;type:text" json:"applicationId"`
+	PostgresID     *string `gorm:"column:postgresId;type:text" json:"postgresId"`
+	MariaDBID      *string `gorm:"column:mariadbId;type:text" json:"mariadbId"`
+	MongoID        *string `gorm:"column:mongoId;type:text" json:"mongoId"`
+	MySQLID        *string `gorm:"column:mysqlId;type:text" json:"mysqlId"`
+	RedisID        *string `gorm:"column:redisId;type:text" json:"redisId"`
+	ComposeID      *string `gorm:"column:composeId;type:text" json:"composeId"`
 	CreatedAt      string  `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	ServerID       *string `gorm:"column:serverId;type:text" json:"serverId"`
+	DestinationID  string  `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
 
+	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
+	Postgres    *Postgres    `gorm:"foreignKey:PostgresID" json:"postgres,omitempty"`
+	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID" json:"mariadb,omitempty"`
+	Mongo       *Mongo       `gorm:"foreignKey:MongoID" json:"mongo,omitempty"`
+	MySQL       *MySQL       `gorm:"foreignKey:MySQLID" json:"mysql,omitempty"`
+	Redis       *Redis       `gorm:"foreignKey:RedisID" json:"redis,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
 	Destination *Destination `gorm:"foreignKey:DestinationID" json:"destination,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
 	Deployments []Deployment `gorm:"foreignKey:VolumeBackupID" json:"deployments,omitempty"`
 }
 

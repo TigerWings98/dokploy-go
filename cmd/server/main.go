@@ -82,52 +82,58 @@ func main() {
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	q := queue.NewQueue(redisAddr)
-	defer q.Close()
 
-	// Start task worker with real service handlers
-	worker := queue.NewWorker(redisAddr, 10, queue.TaskHandlers{
-		HandleDeployApplication: func(ctx context.Context, payload queue.DeployApplicationPayload) error {
-			log.Printf("Deploy application: %s", payload.ApplicationID)
-			return appSvc.Deploy(payload.ApplicationID, payload.Title, payload.Description)
-		},
-		HandleDeployCompose: func(ctx context.Context, payload queue.DeployComposePayload) error {
-			log.Printf("Deploy compose: %s", payload.ComposeID)
-			return composeSvc.Deploy(payload.ComposeID, payload.Title)
-		},
-		HandleDeployDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
-			log.Printf("Deploy database: %s (%s)", payload.DatabaseID, payload.Type)
-			return deployDatabaseByType(dbSvc, payload.DatabaseID, payload.Type)
-		},
-		HandleRebuildDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
-			log.Printf("Rebuild database: %s (%s)", payload.DatabaseID, payload.Type)
-			return dbSvc.RebuildDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
-		},
-		HandleStopApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
-			log.Printf("Stop application: %s", payload.ID)
-			return appSvc.Stop(payload.ID)
-		},
-		HandleStartApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
-			log.Printf("Start application: %s", payload.ID)
-			return appSvc.Start(payload.ID)
-		},
-		HandleBackupRun: func(ctx context.Context, payload queue.SimpleIDPayload) error {
-			log.Printf("Backup run: %s", payload.ID)
-			return backupSvc.RunBackup(payload.ID)
-		},
-		HandleDockerCleanup: func(ctx context.Context) error {
-			log.Println("Docker cleanup")
-			if dockerClient != nil {
-				return dockerClient.PruneSystem(ctx)
+	var q *queue.Queue
+	var worker *queue.Worker
+	if queue.IsRedisAvailable(redisAddr) {
+		q = queue.NewQueue(redisAddr)
+		defer q.Close()
+
+		worker = queue.NewWorker(redisAddr, 10, queue.TaskHandlers{
+			HandleDeployApplication: func(ctx context.Context, payload queue.DeployApplicationPayload) error {
+				log.Printf("Deploy application: %s", payload.ApplicationID)
+				return appSvc.Deploy(payload.ApplicationID, payload.Title, payload.Description)
+			},
+			HandleDeployCompose: func(ctx context.Context, payload queue.DeployComposePayload) error {
+				log.Printf("Deploy compose: %s", payload.ComposeID)
+				return composeSvc.Deploy(payload.ComposeID, payload.Title)
+			},
+			HandleDeployDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
+				log.Printf("Deploy database: %s (%s)", payload.DatabaseID, payload.Type)
+				return deployDatabaseByType(dbSvc, payload.DatabaseID, payload.Type)
+			},
+			HandleRebuildDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
+				log.Printf("Rebuild database: %s (%s)", payload.DatabaseID, payload.Type)
+				return dbSvc.RebuildDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
+			},
+			HandleStopApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+				log.Printf("Stop application: %s", payload.ID)
+				return appSvc.Stop(payload.ID)
+			},
+			HandleStartApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+				log.Printf("Start application: %s", payload.ID)
+				return appSvc.Start(payload.ID)
+			},
+			HandleBackupRun: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+				log.Printf("Backup run: %s", payload.ID)
+				return backupSvc.RunBackup(payload.ID)
+			},
+			HandleDockerCleanup: func(ctx context.Context) error {
+				log.Println("Docker cleanup")
+				if dockerClient != nil {
+					return dockerClient.PruneSystem(ctx)
+				}
+				return nil
+			},
+		})
+		go func() {
+			if err := worker.Start(); err != nil {
+				log.Printf("Warning: task worker failed to start: %v", err)
 			}
-			return nil
-		},
-	})
-	go func() {
-		if err := worker.Start(); err != nil {
-			log.Printf("Warning: task worker failed to start: %v (Redis may not be available)", err)
-		}
-	}()
+		}()
+	} else {
+		log.Println("Redis not available, task queue disabled")
+	}
 
 	// Initialize Echo
 	e := echo.New()
@@ -183,7 +189,9 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
-	worker.Stop()
+	if worker != nil {
+		worker.Stop()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -48,6 +48,9 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	e.GET("/ws/container-logs", h.ContainerLogs)
 	e.GET("/ws/docker-stats", h.DockerStats)
 	e.GET("/ws/terminal", h.Terminal)
+
+	// Frontend compatibility aliases (original Dokploy paths)
+	e.GET("/listen-deployment", h.DeploymentLogs)
 }
 
 // authenticate validates the WebSocket connection.

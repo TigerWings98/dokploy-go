@@ -11,7 +11,7 @@ import (
 type Compose struct {
 	ComposeID     string            `gorm:"column:composeId;primaryKey;type:text" json:"composeId"`
 	Name          string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName       string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	AppName       string            `gorm:"column:appName;type:text;not null;uniqueIndex:compose_appName_unique" json:"appName"`
 	Description   *string           `gorm:"column:description;type:text" json:"description"`
 	Env           *string           `gorm:"column:env;type:text" json:"env"`
 	ComposeFile   string            `gorm:"column:composeFile;type:text;not null;default:''" json:"composeFile"`

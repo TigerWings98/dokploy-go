@@ -18,7 +18,7 @@ type Project struct {
 
 	// Relations
 	Organization *Organization  `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	Environments []Environment  `gorm:"foreignKey:ProjectID" json:"environments,omitempty"`
+	Environments []Environment  `gorm:"foreignKey:ProjectID;references:ProjectID" json:"environments,omitempty"`
 }
 
 func (Project) TableName() string { return "project" }
@@ -44,14 +44,14 @@ type Environment struct {
 	IsDefault     bool    `gorm:"column:isDefault;not null;default:false" json:"isDefault"`
 
 	// Relations
-	Project      *Project      `gorm:"foreignKey:ProjectID" json:"project,omitempty"`
-	Applications []Application `gorm:"foreignKey:EnvironmentID" json:"applications,omitempty"`
-	Postgres     []Postgres    `gorm:"foreignKey:EnvironmentID" json:"postgres,omitempty"`
-	MySQL        []MySQL       `gorm:"foreignKey:EnvironmentID" json:"mysql,omitempty"`
-	MariaDB      []MariaDB     `gorm:"foreignKey:EnvironmentID" json:"mariadb,omitempty"`
-	Mongo        []Mongo       `gorm:"foreignKey:EnvironmentID" json:"mongo,omitempty"`
-	Redis        []Redis       `gorm:"foreignKey:EnvironmentID" json:"redis,omitempty"`
-	Compose      []Compose     `gorm:"foreignKey:EnvironmentID" json:"compose,omitempty"`
+	Project      *Project      `gorm:"foreignKey:ProjectID;references:ProjectID" json:"project"`
+	Applications []Application `gorm:"foreignKey:EnvironmentID" json:"applications"`
+	Postgres     []Postgres    `gorm:"foreignKey:EnvironmentID" json:"postgres"`
+	MySQL        []MySQL       `gorm:"foreignKey:EnvironmentID" json:"mysql"`
+	MariaDB      []MariaDB     `gorm:"foreignKey:EnvironmentID" json:"mariadb"`
+	Mongo        []Mongo       `gorm:"foreignKey:EnvironmentID" json:"mongo"`
+	Redis        []Redis       `gorm:"foreignKey:EnvironmentID" json:"redis"`
+	Compose      []Compose     `gorm:"foreignKey:EnvironmentID" json:"compose"`
 }
 
 func (Environment) TableName() string { return "environment" }

@@ -26,7 +26,7 @@ type WebServerSettings struct {
 	UpdatedAt                time.Time       `gorm:"column:updatedAt;not null;default:now()" json:"updatedAt"`
 }
 
-func (WebServerSettings) TableName() string { return "web_server_settings" }
+func (WebServerSettings) TableName() string { return "webServerSettings" }
 
 func (w *WebServerSettings) BeforeCreate(tx *gorm.DB) error {
 	if w.ID == "" {

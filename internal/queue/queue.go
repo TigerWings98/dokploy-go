@@ -5,9 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
+
+// IsRedisAvailable checks if Redis is reachable at the given address.
+func IsRedisAvailable(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
 
 // Task types
 const (

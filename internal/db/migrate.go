@@ -7,10 +7,19 @@ import (
 )
 
 // AutoMigrate runs GORM auto-migration for all schema models.
-// This creates tables that don't exist and adds missing columns.
-// It does NOT drop columns or change types (safe for production).
+// If the database already has tables (existing Dokploy installation managed by Drizzle),
+// we skip migration to avoid constraint name conflicts between GORM and Drizzle conventions.
+// AutoMigrate only runs on fresh databases where tables don't exist yet.
 func (d *DB) AutoMigrate() error {
-	log.Println("Running database auto-migration...")
+	// Check if this is an existing database by looking for a core table
+	var count int64
+	d.DB.Raw("SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'user' AND table_type = 'BASE TABLE'").Scan(&count)
+	if count > 0 {
+		log.Println("Existing database detected, skipping auto-migration")
+		return nil
+	}
+
+	log.Println("Fresh database detected, running auto-migration...")
 
 	err := d.DB.AutoMigrate(
 		// Auth tables

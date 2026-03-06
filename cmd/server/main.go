@@ -14,6 +14,7 @@ import (
 	"github.com/dokploy/dokploy/internal/docker"
 	"github.com/dokploy/dokploy/internal/handler"
 	"github.com/dokploy/dokploy/internal/queue"
+	"github.com/dokploy/dokploy/internal/setup"
 	"github.com/dokploy/dokploy/internal/ws"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -35,6 +36,12 @@ func main() {
 	dockerClient, err := docker.NewClient()
 	if err != nil {
 		log.Printf("Warning: failed to initialize Docker client: %v", err)
+	}
+
+	// Run server setup/initialization
+	s := setup.New(cfg, dockerClient)
+	if err := s.Initialize(); err != nil {
+		log.Printf("Warning: server setup incomplete: %v", err)
 	}
 
 	// Initialize task queue (optional - requires Redis)

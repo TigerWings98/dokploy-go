@@ -145,6 +145,7 @@ func main() {
 		handler.WithNotifier(notifier),
 		handler.WithCertsPath(cfg.Paths.CertificatesPath),
 		handler.WithScheduler(sched),
+		handler.WithBackupService(backupSvc),
 	)
 	h.RegisterRoutes(e)
 

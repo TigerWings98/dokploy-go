@@ -15,6 +15,8 @@ func (h *Handler) registerBackupRoutes(g *echo.Group) {
 	g.PUT("/:backupId", h.UpdateBackup)
 	g.DELETE("/:backupId", h.DeleteBackup)
 	g.POST("/:backupId/manual", h.ManualBackup)
+	g.POST("/:backupId/restore", h.RestoreBackup)
+	g.GET("/:backupId/files", h.ListBackupFiles)
 }
 
 type CreateBackupRequest struct {
@@ -127,4 +129,46 @@ func (h *Handler) ManualBackup(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Backup queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Backup queued"})
+}
+
+type RestoreBackupRequest struct {
+	Filename string `json:"filename" validate:"required"`
+}
+
+func (h *Handler) RestoreBackup(c echo.Context) error {
+	id := c.Param("backupId")
+
+	var req RestoreBackupRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	if h.BackupSvc == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Backup service not available")
+	}
+
+	// Run restore in background
+	go func() {
+		if err := h.BackupSvc.RestoreBackup(id, req.Filename); err != nil {
+			// Error is logged inside RestoreBackup
+			_ = err
+		}
+	}()
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "Restore started"})
+}
+
+func (h *Handler) ListBackupFiles(c echo.Context) error {
+	id := c.Param("backupId")
+
+	if h.BackupSvc == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Backup service not available")
+	}
+
+	files, err := h.BackupSvc.ListBackupFiles(id)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, files)
 }

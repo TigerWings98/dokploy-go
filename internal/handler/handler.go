@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/dokploy/dokploy/internal/auth"
+	"github.com/dokploy/dokploy/internal/backup"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/docker"
 	mw "github.com/dokploy/dokploy/internal/middleware"
@@ -21,6 +22,7 @@ type Handler struct {
 	Traefik   *traefik.Manager
 	Notifier  *notify.Notifier
 	Scheduler *scheduler.Scheduler
+	BackupSvc *backup.Service
 	CertsPath string
 }
 
@@ -59,6 +61,11 @@ func WithNotifier(n *notify.Notifier) HandlerOption {
 // WithScheduler sets the scheduler.
 func WithScheduler(s *scheduler.Scheduler) HandlerOption {
 	return func(h *Handler) { h.Scheduler = s }
+}
+
+// WithBackupService sets the backup service.
+func WithBackupService(b *backup.Service) HandlerOption {
+	return func(h *Handler) { h.BackupSvc = b }
 }
 
 // WithCertsPath sets the certificates directory path.

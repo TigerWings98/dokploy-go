@@ -12,7 +12,9 @@ import (
 
 func (h *Handler) registerRollbackRoutes(g *echo.Group) {
 	g.GET("", h.ListRollbacks)
+	g.POST("", h.CreateRollback)
 	g.POST("/:rollbackId/apply", h.ApplyRollback)
+	g.DELETE("/:rollbackId", h.DeleteRollback)
 }
 
 func (h *Handler) ListRollbacks(c echo.Context) error {
@@ -50,4 +52,47 @@ func (h *Handler) ApplyRollback(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Rollback queued", "taskId": info.ID})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Rollback queued"})
+}
+
+type CreateRollbackRequest struct {
+	ApplicationID string `json:"applicationId" validate:"required"`
+	DockerImage   string `json:"dockerImage" validate:"required"`
+}
+
+func (h *Handler) CreateRollback(c echo.Context) error {
+	var req CreateRollbackRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	// Verify application exists
+	var app schema.Application
+	if err := h.DB.First(&app, "\"applicationId\" = ?", req.ApplicationID).Error; err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Application not found")
+	}
+
+	rb := &schema.Rollback{
+		ApplicationID: req.ApplicationID,
+		DockerImage:   req.DockerImage,
+	}
+
+	if err := h.DB.Create(rb).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusCreated, rb)
+}
+
+func (h *Handler) DeleteRollback(c echo.Context) error {
+	id := c.Param("rollbackId")
+
+	result := h.DB.Delete(&schema.Rollback{}, "\"rollbackId\" = ?", id)
+	if result.Error != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, result.Error.Error())
+	}
+	if result.RowsAffected == 0 {
+		return echo.NewHTTPError(http.StatusNotFound, "Rollback not found")
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }

@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 	"gorm.io/gorm"
 )
 
@@ -15,7 +19,11 @@ func (h *Handler) registerComposeRoutes(g *echo.Group) {
 	g.PUT("/:composeId", h.UpdateCompose)
 	g.DELETE("/:composeId", h.DeleteCompose)
 	g.POST("/:composeId/deploy", h.DeployCompose)
+	g.POST("/:composeId/redeploy", h.RedeployCompose)
 	g.POST("/:composeId/stop", h.StopCompose)
+	g.POST("/:composeId/start", h.StartCompose)
+	g.GET("/:composeId/services", h.LoadComposeServices)
+	g.POST("/:composeId/randomize", h.RandomizeCompose)
 }
 
 type CreateComposeRequest struct {
@@ -161,5 +169,127 @@ func (h *Handler) StopCompose(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"message":   "Stop requested",
 		"composeId": composeID,
+	})
+}
+
+func (h *Handler) RedeployCompose(c echo.Context) error {
+	composeID := c.Param("composeId")
+
+	var compose schema.Compose
+	if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Compose not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	title := fmt.Sprintf("Redeploy %s", compose.Name)
+	if h.Queue != nil {
+		info, err := h.Queue.EnqueueDeployCompose(composeID, &title)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":   "Redeployment queued",
+			"composeId": composeID,
+			"taskId":    info.ID,
+		})
+	}
+	return c.JSON(http.StatusOK, map[string]string{
+		"message":   "Redeployment queued",
+		"composeId": composeID,
+	})
+}
+
+func (h *Handler) StartCompose(c echo.Context) error {
+	composeID := c.Param("composeId")
+
+	var compose schema.Compose
+	if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Compose not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if h.Queue != nil {
+		title := fmt.Sprintf("Start %s", compose.Name)
+		info, err := h.Queue.EnqueueDeployCompose(composeID, &title)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]string{
+			"message":   "Start requested",
+			"composeId": composeID,
+			"taskId":    info.ID,
+		})
+	}
+	return c.JSON(http.StatusOK, map[string]string{
+		"message":   "Start requested",
+		"composeId": composeID,
+	})
+}
+
+func (h *Handler) LoadComposeServices(c echo.Context) error {
+	composeID := c.Param("composeId")
+
+	var compose schema.Compose
+	if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Compose not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if h.Docker == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker client not available")
+	}
+
+	// List services/containers matching the compose project name
+	ctx := context.Background()
+	containers, err := h.Docker.ListContainers(ctx)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	var services []map[string]interface{}
+	for _, ctr := range containers {
+		projectLabel := ctr.Labels["com.docker.compose.project"]
+		if projectLabel == compose.AppName {
+			services = append(services, map[string]interface{}{
+				"id":      ctr.ID[:12],
+				"name":    strings.TrimPrefix(ctr.Names[0], "/"),
+				"image":   ctr.Image,
+				"state":   ctr.State,
+				"status":  ctr.Status,
+				"service": ctr.Labels["com.docker.compose.service"],
+			})
+		}
+	}
+
+	return c.JSON(http.StatusOK, services)
+}
+
+func (h *Handler) RandomizeCompose(c echo.Context) error {
+	composeID := c.Param("composeId")
+
+	var compose schema.Compose
+	if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Compose not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	suffix, _ := gonanoid.New(8)
+	newSuffix := compose.AppName + "-" + suffix
+
+	if err := h.DB.Model(&compose).Update("suffix", newSuffix).Error; err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Compose suffix randomized",
+		"suffix":  newSuffix,
 	})
 }

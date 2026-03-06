@@ -119,6 +119,23 @@ func (q *Queue) EnqueueStartApplication(appID string) (*asynq.TaskInfo, error) {
 	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
 }
 
+// EnqueueStopCompose enqueues a compose stop.
+func (q *Queue) EnqueueStopCompose(composeID string) (*asynq.TaskInfo, error) {
+	payload, _ := json.Marshal(SimpleIDPayload{ID: composeID})
+	task := asynq.NewTask(TaskStopCompose, payload)
+	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
+}
+
+// EnqueueStopDatabase enqueues a database stop.
+func (q *Queue) EnqueueStopDatabase(databaseID, dbType string) (*asynq.TaskInfo, error) {
+	payload, _ := json.Marshal(DeployDatabasePayload{
+		DatabaseID: databaseID,
+		Type:       dbType,
+	})
+	task := asynq.NewTask("stop:database", payload)
+	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
+}
+
 // EnqueueBackupRun enqueues a backup run.
 func (q *Queue) EnqueueBackupRun(backupID string) (*asynq.TaskInfo, error) {
 	payload, _ := json.Marshal(SimpleIDPayload{ID: backupID})

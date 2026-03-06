@@ -3,19 +3,60 @@ package handler
 import (
 	"github.com/dokploy/dokploy/internal/auth"
 	"github.com/dokploy/dokploy/internal/db"
+	"github.com/dokploy/dokploy/internal/docker"
 	mw "github.com/dokploy/dokploy/internal/middleware"
+	"github.com/dokploy/dokploy/internal/notify"
+	"github.com/dokploy/dokploy/internal/queue"
+	"github.com/dokploy/dokploy/internal/traefik"
 	"github.com/labstack/echo/v4"
 )
 
 // Handler holds shared dependencies for all route handlers.
 type Handler struct {
-	DB   *db.DB
-	Auth *auth.Auth
+	DB        *db.DB
+	Auth      *auth.Auth
+	Queue     *queue.Queue
+	Docker    *docker.Client
+	Traefik   *traefik.Manager
+	Notifier  *notify.Notifier
+	CertsPath string
 }
 
 // New creates a new Handler.
-func New(database *db.DB, a *auth.Auth) *Handler {
-	return &Handler{DB: database, Auth: a}
+func New(database *db.DB, a *auth.Auth, opts ...HandlerOption) *Handler {
+	h := &Handler{DB: database, Auth: a}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// HandlerOption configures the Handler.
+type HandlerOption func(*Handler)
+
+// WithQueue sets the task queue.
+func WithQueue(q *queue.Queue) HandlerOption {
+	return func(h *Handler) { h.Queue = q }
+}
+
+// WithDocker sets the Docker client.
+func WithDocker(d *docker.Client) HandlerOption {
+	return func(h *Handler) { h.Docker = d }
+}
+
+// WithTraefik sets the Traefik config manager.
+func WithTraefik(t *traefik.Manager) HandlerOption {
+	return func(h *Handler) { h.Traefik = t }
+}
+
+// WithNotifier sets the notification sender.
+func WithNotifier(n *notify.Notifier) HandlerOption {
+	return func(h *Handler) { h.Notifier = n }
+}
+
+// WithCertsPath sets the certificates directory path.
+func WithCertsPath(p string) HandlerOption {
+	return func(h *Handler) { h.CertsPath = p }
 }
 
 // RegisterRoutes registers all API routes.

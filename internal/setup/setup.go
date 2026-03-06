@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/docker"
@@ -49,6 +51,11 @@ func (s *Setup) Initialize() error {
 	// 5. Create default middlewares
 	if err := s.createDefaultMiddlewares(); err != nil {
 		log.Printf("Warning: failed to create default middlewares: %v", err)
+	}
+
+	// 6. Deploy Traefik service
+	if err := s.deployTraefikService(); err != nil {
+		log.Printf("Warning: failed to deploy Traefik: %v", err)
 	}
 
 	log.Println("Server initialization complete")
@@ -185,6 +192,88 @@ func (s *Setup) createDefaultMiddlewares() error {
         permanent: true
 `
 	return os.WriteFile(middlewarePath, []byte(config), 0644)
+}
+
+// deployTraefikService deploys Traefik as a Docker Swarm service if not running.
+func (s *Setup) deployTraefikService() error {
+	if s.docker == nil {
+		return fmt.Errorf("docker client not available")
+	}
+
+	ctx := context.Background()
+	// Check if traefik service already exists
+	container, err := s.docker.GetContainerByName(ctx, "dokploy-traefik")
+	if err != nil {
+		return err
+	}
+	if container != nil {
+		log.Println("Traefik service already running")
+		return nil
+	}
+
+	// Deploy Traefik via docker stack or service create
+	traefikPort := getEnvDefault("TRAEFIK_PORT", "80")
+	traefikSSLPort := getEnvDefault("TRAEFIK_SSL_PORT", "443")
+
+	cmd := fmt.Sprintf(
+		"docker service create --name dokploy-traefik "+
+			"--constraint 'node.role==manager' "+
+			"--network dokploy-network "+
+			"--publish %s:%s --publish %s:%s --publish 8080:8080 "+
+			"--mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock "+
+			"--mount type=bind,source=%s/traefik.yml,target=/etc/traefik/traefik.yml "+
+			"--mount type=bind,source=%s,target=%s "+
+			"traefik:v3.1",
+		traefikPort, traefikPort,
+		traefikSSLPort, traefikSSLPort,
+		s.cfg.Paths.MainTraefikPath,
+		s.cfg.Paths.DynamicTraefikPath, s.cfg.Paths.DynamicTraefikPath,
+	)
+
+	log.Println("Deploying Traefik service...")
+	_, _ = s.docker.DockerClient().Info(ctx) // ensure connection
+	// Use process.ExecAsync for the docker service create
+	result, execErr := execCommand(cmd)
+	if execErr != nil {
+		return fmt.Errorf("failed to deploy Traefik: %w (output: %s)", execErr, result)
+	}
+
+	log.Println("Traefik service deployed successfully")
+	return nil
+}
+
+// AddLetsEncryptResolver adds Let's Encrypt certificate resolver to traefik.yml.
+func (s *Setup) AddLetsEncryptResolver(email string) error {
+	configPath := filepath.Join(s.cfg.Paths.MainTraefikPath, "traefik.yml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	// Check if certResolver already exists
+	if strings.Contains(content, "certificatesResolvers") {
+		return nil
+	}
+
+	resolver := fmt.Sprintf(`
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "%s"
+      storage: "%s/acme.json"
+      httpChallenge:
+        entryPoint: web
+`, email, s.cfg.Paths.MainTraefikPath)
+
+	content += resolver
+	return os.WriteFile(configPath, []byte(content), 0644)
+}
+
+func execCommand(cmd string) (string, error) {
+	out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput()
+	return string(out), err
 }
 
 func getEnvDefault(key, defaultVal string) string {

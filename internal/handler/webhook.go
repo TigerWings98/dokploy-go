@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/service"
 	"github.com/labstack/echo/v4"
 )
 
@@ -74,23 +75,35 @@ func (h *Handler) GithubWebhook(c echo.Context) error {
 			Action      string `json:"action"`
 			Number      int    `json:"number"`
 			PullRequest struct {
-				Head struct {
+				ID    int    `json:"id"`
+				Title string `json:"title"`
+				Head  struct {
 					Ref string `json:"ref"`
+					SHA string `json:"sha"`
 				} `json:"head"`
+				HTMLURL string `json:"html_url"`
 			} `json:"pull_request"`
 			Repository struct {
 				FullName string `json:"full_name"`
+				Owner    struct {
+					Login string `json:"login"`
+				} `json:"owner"`
+				Name string `json:"name"`
 			} `json:"repository"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
 		}
 
-		if payload.Action == "opened" || payload.Action == "synchronize" {
-			return h.handleGithubPR(c, payload.Repository.FullName, payload.PullRequest.Head.Ref, payload.Number)
+		switch payload.Action {
+		case "opened", "synchronize", "reopened":
+			return h.handleGithubPR(c, payload.Repository.FullName, payload.PullRequest.Head.Ref, payload.Number,
+				fmt.Sprintf("%d", payload.PullRequest.ID), payload.PullRequest.Title, payload.PullRequest.HTMLURL)
+		case "closed":
+			return h.handleGithubPRClosed(c, fmt.Sprintf("%d", payload.PullRequest.ID))
+		default:
+			return c.JSON(http.StatusOK, map[string]string{"message": "ignored action"})
 		}
-
-		return c.JSON(http.StatusOK, map[string]string{"message": "ignored action"})
 
 	default:
 		return c.JSON(http.StatusOK, map[string]string{"message": "event not handled"})
@@ -134,27 +147,60 @@ func (h *Handler) handleGithubPush(c echo.Context, body []byte, signature, repoF
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }
 
-func (h *Handler) handleGithubPR(c echo.Context, repoFullName, headBranch string, prNumber int) error {
+func (h *Handler) handleGithubPR(c echo.Context, repoFullName, headBranch string, prNumber int, prID, prTitle, prURL string) error {
 	var apps []schema.Application
 	err := h.DB.
-		Where("\"repository\" = ? AND \"sourceType\" = ? AND \"previewWildcard\" IS NOT NULL",
-			repoFullName, schema.SourceTypeGithub).
+		Where("\"repository\" = ? AND \"sourceType\" = ? AND \"isPreviewDeploymentsActive\" = ?",
+			repoFullName, schema.SourceTypeGithub, true).
 		Find(&apps).Error
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	// Preview deployments: enqueue deploy for each matching app with PR branch
-	if h.Queue != nil {
-		for _, app := range apps {
-			title := fmt.Sprintf("Preview PR #%d", prNumber)
-			_, err := h.Queue.EnqueueDeployApplication(app.ApplicationID, &title, nil)
+	created := 0
+	for _, app := range apps {
+		if app.PreviewWildcard == nil || *app.PreviewWildcard == "" {
+			continue
+		}
+
+		if h.PreviewSvc != nil {
+			preview, err := h.PreviewSvc.CreatePreviewDeployment(service.CreatePreviewInput{
+				ApplicationID:     app.ApplicationID,
+				Branch:            headBranch,
+				PullRequestID:     prID,
+				PullRequestNumber: fmt.Sprintf("%d", prNumber),
+				PullRequestURL:    prURL,
+				PullRequestTitle:  prTitle,
+			})
 			if err != nil {
-				log.Printf("Failed to enqueue preview deploy for app %s: %v", app.ApplicationID, err)
+				log.Printf("Failed to create preview deployment for app %s: %v", app.ApplicationID, err)
+				continue
 			}
+
+			// Queue deployment for the preview
+			if h.Queue != nil {
+				title := fmt.Sprintf("Preview PR #%d", prNumber)
+				if _, err := h.Queue.EnqueueDeployApplication(preview.ApplicationID, &title, nil); err != nil {
+					log.Printf("Failed to enqueue preview deploy: %v", err)
+				}
+			}
+			created++
 		}
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d preview apps", len(apps))})
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("created %d preview deployments", created)})
+}
+
+func (h *Handler) handleGithubPRClosed(c echo.Context, prID string) error {
+	if h.PreviewSvc == nil {
+		return c.JSON(http.StatusOK, map[string]string{"message": "preview service not available"})
+	}
+
+	if err := h.PreviewSvc.RemovePreviewsByPullRequestID(prID); err != nil {
+		log.Printf("Failed to cleanup preview deployments for PR %s: %v", prID, err)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "preview deployments cleaned up"})
 }
 
 func verifyGithubSignature(payload []byte, signature, secret string) bool {
@@ -177,37 +223,73 @@ func (h *Handler) GitlabWebhook(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to read body")
 	}
 
-	if event != "Push Hook" && event != "Tag Push Hook" {
+	switch event {
+	case "Push Hook", "Tag Push Hook":
+		var payload struct {
+			Ref     string `json:"ref"`
+			Project struct {
+				PathWithNamespace string `json:"path_with_namespace"`
+			} `json:"project"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		}
+
+		branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
+
+		var apps []schema.Application
+		h.DB.
+			Where("\"gitlabRepository\" = ? AND \"gitlabBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
+				payload.Project.PathWithNamespace, branch, schema.SourceTypeGitlab, true).
+			Find(&apps)
+
+		var composes []schema.Compose
+		h.DB.
+			Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
+				payload.Project.PathWithNamespace, branch, schema.SourceTypeComposeGitlab, true).
+			Find(&composes)
+
+		h.enqueueWebhookDeploys(apps, composes)
+		total := len(apps) + len(composes)
+		return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
+
+	case "Merge Request Hook":
+		var payload struct {
+			ObjectAttributes struct {
+				IID        int    `json:"iid"`
+				ID         int    `json:"id"`
+				Title      string `json:"title"`
+				URL        string `json:"url"`
+				SourceBranch string `json:"source_branch"`
+				State      string `json:"state"`
+				Action     string `json:"action"`
+			} `json:"object_attributes"`
+			Project struct {
+				PathWithNamespace string `json:"path_with_namespace"`
+			} `json:"project"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		}
+
+		attrs := payload.ObjectAttributes
+		prID := fmt.Sprintf("gitlab-%d", attrs.ID)
+
+		if attrs.Action == "open" || attrs.Action == "update" || attrs.Action == "reopen" {
+			return h.handleGenericPR(c, payload.Project.PathWithNamespace, schema.SourceTypeGitlab,
+				attrs.SourceBranch, attrs.IID, prID, attrs.Title, attrs.URL)
+		}
+		if attrs.State == "closed" || attrs.State == "merged" {
+			if h.PreviewSvc != nil {
+				h.PreviewSvc.RemovePreviewsByPullRequestID(prID)
+			}
+			return c.JSON(http.StatusOK, map[string]string{"message": "preview deployments cleaned up"})
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "ignored action"})
+
+	default:
 		return c.JSON(http.StatusOK, map[string]string{"message": "event not handled"})
 	}
-
-	var payload struct {
-		Ref     string `json:"ref"`
-		Project struct {
-			PathWithNamespace string `json:"path_with_namespace"`
-		} `json:"project"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
-	}
-
-	branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
-
-	var apps []schema.Application
-	h.DB.
-		Where("\"gitlabRepository\" = ? AND \"gitlabBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
-			payload.Project.PathWithNamespace, branch, schema.SourceTypeGitlab, true).
-		Find(&apps)
-
-	var composes []schema.Compose
-	h.DB.
-		Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
-			payload.Project.PathWithNamespace, branch, schema.SourceTypeComposeGitlab, true).
-		Find(&composes)
-
-	h.enqueueWebhookDeploys(apps, composes)
-	total := len(apps) + len(composes)
-	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }
 
 // BitbucketWebhook handles Bitbucket webhook events.
@@ -219,46 +301,85 @@ func (h *Handler) BitbucketWebhook(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to read body")
 	}
 
-	if event != "repo:push" {
+	switch event {
+	case "repo:push":
+		var payload struct {
+			Push struct {
+				Changes []struct {
+					New struct {
+						Name string `json:"name"`
+					} `json:"new"`
+				} `json:"changes"`
+			} `json:"push"`
+			Repository struct {
+				FullName string `json:"full_name"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		}
+
+		branch := ""
+		if len(payload.Push.Changes) > 0 {
+			branch = payload.Push.Changes[0].New.Name
+		}
+
+		var apps []schema.Application
+		h.DB.
+			Where("\"bitbucketRepository\" = ? AND \"bitbucketBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
+				payload.Repository.FullName, branch, schema.SourceTypeBitbucket, true).
+			Find(&apps)
+
+		var composes []schema.Compose
+		h.DB.
+			Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
+				payload.Repository.FullName, branch, schema.SourceTypeComposeBitbucket, true).
+			Find(&composes)
+
+		h.enqueueWebhookDeploys(apps, composes)
+		total := len(apps) + len(composes)
+		return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
+
+	case "pullrequest:created", "pullrequest:updated":
+		var payload struct {
+			PullRequest struct {
+				ID          int    `json:"id"`
+				Title       string `json:"title"`
+				Source      struct {
+					Branch struct{ Name string } `json:"branch"`
+				} `json:"source"`
+				Links struct {
+					HTML struct{ Href string } `json:"html"`
+				} `json:"links"`
+			} `json:"pullrequest"`
+			Repository struct {
+				FullName string `json:"full_name"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		}
+		pr := payload.PullRequest
+		prID := fmt.Sprintf("bitbucket-%d", pr.ID)
+		return h.handleGenericPR(c, payload.Repository.FullName, schema.SourceTypeBitbucket,
+			pr.Source.Branch.Name, pr.ID, prID, pr.Title, pr.Links.HTML.Href)
+
+	case "pullrequest:fulfilled", "pullrequest:rejected":
+		var payload struct {
+			PullRequest struct{ ID int } `json:"pullrequest"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		}
+		prID := fmt.Sprintf("bitbucket-%d", payload.PullRequest.ID)
+		if h.PreviewSvc != nil {
+			h.PreviewSvc.RemovePreviewsByPullRequestID(prID)
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "preview deployments cleaned up"})
+
+	default:
 		return c.JSON(http.StatusOK, map[string]string{"message": "event not handled"})
 	}
-
-	var payload struct {
-		Push struct {
-			Changes []struct {
-				New struct {
-					Name string `json:"name"`
-				} `json:"new"`
-			} `json:"changes"`
-		} `json:"push"`
-		Repository struct {
-			FullName string `json:"full_name"`
-		} `json:"repository"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
-	}
-
-	branch := ""
-	if len(payload.Push.Changes) > 0 {
-		branch = payload.Push.Changes[0].New.Name
-	}
-
-	var apps []schema.Application
-	h.DB.
-		Where("\"bitbucketRepository\" = ? AND \"bitbucketBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
-			payload.Repository.FullName, branch, schema.SourceTypeBitbucket, true).
-		Find(&apps)
-
-	var composes []schema.Compose
-	h.DB.
-		Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
-			payload.Repository.FullName, branch, schema.SourceTypeComposeBitbucket, true).
-		Find(&composes)
-
-	h.enqueueWebhookDeploys(apps, composes)
-	total := len(apps) + len(composes)
-	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
 }
 
 // GiteaWebhook handles Gitea webhook events.
@@ -270,35 +391,116 @@ func (h *Handler) GiteaWebhook(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to read body")
 	}
 
-	if event != "push" {
+	switch event {
+	case "pull_request":
+		var payload struct {
+			Action      string `json:"action"`
+			Number      int    `json:"number"`
+			PullRequest struct {
+				ID    int    `json:"id"`
+				Title string `json:"title"`
+				Head  struct{ Ref string } `json:"head_branch"`
+				URL   string `json:"html_url"`
+			} `json:"pull_request"`
+			Repository struct {
+				FullName string `json:"full_name"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		}
+		prID := fmt.Sprintf("gitea-%d", payload.PullRequest.ID)
+		if payload.Action == "opened" || payload.Action == "synchronized" || payload.Action == "reopened" {
+			return h.handleGenericPR(c, payload.Repository.FullName, schema.SourceTypeGitea,
+				payload.PullRequest.Head.Ref, payload.Number, prID, payload.PullRequest.Title, payload.PullRequest.URL)
+		}
+		if payload.Action == "closed" {
+			if h.PreviewSvc != nil {
+				h.PreviewSvc.RemovePreviewsByPullRequestID(prID)
+			}
+			return c.JSON(http.StatusOK, map[string]string{"message": "preview deployments cleaned up"})
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "ignored action"})
+	case "push":
+		// continue below
+	default:
 		return c.JSON(http.StatusOK, map[string]string{"message": "event not handled"})
 	}
 
-	var payload struct {
+	var pushPayload struct {
 		Ref        string `json:"ref"`
 		Repository struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal(body, &pushPayload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
 	}
 
-	branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
+	branch := strings.TrimPrefix(pushPayload.Ref, "refs/heads/")
 
 	var apps []schema.Application
 	h.DB.
 		Where("\"giteaRepository\" = ? AND \"giteaBranch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
-			payload.Repository.FullName, branch, schema.SourceTypeGitea, true).
+			pushPayload.Repository.FullName, branch, schema.SourceTypeGitea, true).
 		Find(&apps)
 
 	var composes []schema.Compose
 	h.DB.
 		Where("\"repository\" = ? AND \"branch\" = ? AND \"sourceType\" = ? AND \"autoDeploy\" = ?",
-			payload.Repository.FullName, branch, schema.SourceTypeComposeGitea, true).
+			pushPayload.Repository.FullName, branch, schema.SourceTypeComposeGitea, true).
 		Find(&composes)
 
 	h.enqueueWebhookDeploys(apps, composes)
 	total := len(apps) + len(composes)
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("processed %d services", total)})
+}
+
+// handleGenericPR creates preview deployments for any git provider.
+func (h *Handler) handleGenericPR(c echo.Context, repoIdentifier string, sourceType schema.SourceType, branch string, prNumber int, prID, prTitle, prURL string) error {
+	if h.PreviewSvc == nil {
+		return c.JSON(http.StatusOK, map[string]string{"message": "preview service not available"})
+	}
+
+	var apps []schema.Application
+	var query string
+
+	switch sourceType {
+	case schema.SourceTypeGitlab:
+		query = "\"gitlabRepository\" = ? AND \"sourceType\" = ? AND \"isPreviewDeploymentsActive\" = ?"
+	case schema.SourceTypeBitbucket:
+		query = "\"bitbucketRepository\" = ? AND \"sourceType\" = ? AND \"isPreviewDeploymentsActive\" = ?"
+	case schema.SourceTypeGitea:
+		query = "\"giteaRepository\" = ? AND \"sourceType\" = ? AND \"isPreviewDeploymentsActive\" = ?"
+	default:
+		return c.JSON(http.StatusOK, map[string]string{"message": "unsupported source type for preview"})
+	}
+
+	h.DB.Where(query, repoIdentifier, sourceType, true).Find(&apps)
+
+	created := 0
+	for _, app := range apps {
+		if app.PreviewWildcard == nil || *app.PreviewWildcard == "" {
+			continue
+		}
+		preview, err := h.PreviewSvc.CreatePreviewDeployment(service.CreatePreviewInput{
+			ApplicationID:     app.ApplicationID,
+			Branch:            branch,
+			PullRequestID:     prID,
+			PullRequestNumber: fmt.Sprintf("%d", prNumber),
+			PullRequestURL:    prURL,
+			PullRequestTitle:  prTitle,
+		})
+		if err != nil {
+			log.Printf("Failed to create preview deployment for app %s: %v", app.ApplicationID, err)
+			continue
+		}
+		if h.Queue != nil {
+			title := fmt.Sprintf("Preview PR #%d", prNumber)
+			h.Queue.EnqueueDeployApplication(preview.ApplicationID, &title, nil)
+		}
+		created++
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("created %d preview deployments", created)})
 }

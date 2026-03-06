@@ -9,16 +9,19 @@ import (
 
 // PreviewDeployment represents the preview_deployment table.
 type PreviewDeployment struct {
-	PreviewDeploymentID string            `gorm:"column:previewDeploymentId;primaryKey;type:text" json:"previewDeploymentId"`
-	AppName             string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
-	PullRequestNumber   int               `gorm:"column:pullRequestNumber;not null" json:"pullRequestNumber"`
-	PullRequestURL      *string           `gorm:"column:pullRequestUrl;type:text" json:"pullRequestUrl"`
-	PullRequestTitle    *string           `gorm:"column:pullRequestTitle;type:text" json:"pullRequestTitle"`
-	PullRequestBranch   *string           `gorm:"column:pullRequestBranch;type:text" json:"pullRequestBranch"`
-	PreviewStatus       ApplicationStatus `gorm:"column:previewStatus;type:text;not null;default:'idle'" json:"previewStatus"`
-	CreatedAt           string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	ExpiresAt           *string           `gorm:"column:expiresAt;type:text" json:"expiresAt"`
-	ApplicationID       string            `gorm:"column:applicationId;type:text;not null" json:"applicationId"`
+	PreviewDeploymentID   string            `gorm:"column:previewDeploymentId;primaryKey;type:text" json:"previewDeploymentId"`
+	AppName               string            `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	Branch                string            `gorm:"column:branch;type:text;not null" json:"branch"`
+	PullRequestID         string            `gorm:"column:pullRequestId;type:text;not null" json:"pullRequestId"`
+	PullRequestNumber     string            `gorm:"column:pullRequestNumber;type:text;not null" json:"pullRequestNumber"`
+	PullRequestURL        string            `gorm:"column:pullRequestURL;type:text;not null" json:"pullRequestURL"`
+	PullRequestTitle      string            `gorm:"column:pullRequestTitle;type:text;not null" json:"pullRequestTitle"`
+	PullRequestCommentID  string            `gorm:"column:pullRequestCommentId;type:text" json:"pullRequestCommentId"`
+	PreviewStatus         ApplicationStatus `gorm:"column:previewStatus;type:text;not null;default:'idle'" json:"previewStatus"`
+	CreatedAt             string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	ExpiresAt             *string           `gorm:"column:expiresAt;type:text" json:"expiresAt"`
+	ApplicationID         string            `gorm:"column:applicationId;type:text;not null" json:"applicationId"`
+	DomainID              *string           `gorm:"column:domainId;type:text" json:"domainId"`
 
 	// Relations
 	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`

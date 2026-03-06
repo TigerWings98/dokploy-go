@@ -140,9 +140,18 @@ type Application struct {
 	Security           []Security          `gorm:"foreignKey:ApplicationID" json:"security,omitempty"`
 	Ports              []Port              `gorm:"foreignKey:ApplicationID" json:"ports,omitempty"`
 	Registry           *Registry           `gorm:"foreignKey:RegistryID" json:"registry,omitempty"`
+	BuildRegistry      *Registry           `gorm:"foreignKey:BuildRegistryID" json:"buildRegistry,omitempty"`
+	RollbackRegistry   *Registry           `gorm:"foreignKey:RollbackRegistryID" json:"rollbackRegistry,omitempty"`
 	Server             *Server             `gorm:"foreignKey:ServerID" json:"server,omitempty"`
 	BuildServer        *Server             `gorm:"foreignKey:BuildServerID" json:"buildServer,omitempty"`
 	PreviewDeployments []PreviewDeployment `gorm:"foreignKey:ApplicationID" json:"previewDeployments,omitempty"`
+
+	// Git provider relations
+	Github          *Github    `gorm:"foreignKey:GithubID" json:"github,omitempty"`
+	Gitlab          *Gitlab    `gorm:"foreignKey:GitlabID" json:"gitlab,omitempty"`
+	Gitea           *Gitea     `gorm:"foreignKey:GiteaID" json:"gitea,omitempty"`
+	Bitbucket       *Bitbucket `gorm:"foreignKey:BitbucketID" json:"bitbucket,omitempty"`
+	CustomGitSSHKey *SSHKey    `gorm:"foreignKey:CustomGitSSHKeyID" json:"customGitSSHKey,omitempty"`
 }
 
 func (Application) TableName() string { return "application" }

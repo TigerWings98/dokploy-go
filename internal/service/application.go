@@ -12,6 +12,7 @@ import (
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/docker"
+	"github.com/dokploy/dokploy/internal/git"
 	"github.com/dokploy/dokploy/internal/process"
 	"gorm.io/gorm"
 )
@@ -44,6 +45,11 @@ func (s *ApplicationService) FindByID(appID string) (*schema.Application, error)
 		Preload("Server").
 		Preload("Server.SSHKey").
 		Preload("Registry").
+		Preload("Github").
+		Preload("Gitlab").
+		Preload("Gitea").
+		Preload("Bitbucket").
+		Preload("CustomGitSSHKey").
 		First(&app, "\"applicationId\" = ?", appID).Error
 	if err != nil {
 		return nil, err
@@ -144,75 +150,16 @@ func (s *ApplicationService) runDeploy(app *schema.Application, deployment *sche
 }
 
 func (s *ApplicationService) prepareSource(app *schema.Application, buildDir string, writeLog func(string)) error {
-	if err := os.MkdirAll(buildDir, 0755); err != nil {
-		return fmt.Errorf("failed to create build directory: %w", err)
+	result, err := git.CloneWithAuth(app, buildDir, writeLog)
+	if err != nil {
+		return err
 	}
 
-	switch app.SourceType {
-	case schema.SourceTypeGithub, schema.SourceTypeGitlab, schema.SourceTypeBitbucket, schema.SourceTypeGitea:
-		return s.cloneGitRepo(app, buildDir, writeLog)
-	case schema.SourceTypeGit:
-		return s.cloneCustomGit(app, buildDir, writeLog)
-	case schema.SourceTypeDocker:
-		writeLog("Using Docker image directly, no source to clone")
-		return nil
-	case schema.SourceTypeDrop:
-		writeLog("Using uploaded source (drop)")
-		return nil
-	default:
-		return fmt.Errorf("unsupported source type: %s", app.SourceType)
-	}
-}
-
-func (s *ApplicationService) cloneGitRepo(app *schema.Application, buildDir string, writeLog func(string)) error {
-	var repoURL, branch string
-
-	switch app.SourceType {
-	case schema.SourceTypeGithub:
-		if app.Repository == nil || app.Owner == nil || app.Branch == nil {
-			return fmt.Errorf("github source requires repository, owner, and branch")
-		}
-		repoURL = fmt.Sprintf("https://github.com/%s/%s.git", *app.Owner, *app.Repository)
-		branch = *app.Branch
-	case schema.SourceTypeGitlab:
-		if app.GitlabRepository == nil || app.GitlabBranch == nil {
-			return fmt.Errorf("gitlab source requires repository and branch")
-		}
-		repoURL = *app.GitlabRepository
-		branch = *app.GitlabBranch
-	case schema.SourceTypeBitbucket:
-		if app.BitbucketOwner == nil || app.BitbucketRepository == nil || app.BitbucketBranch == nil {
-			return fmt.Errorf("bitbucket source requires owner, repository, and branch")
-		}
-		repoURL = fmt.Sprintf("https://bitbucket.org/%s/%s.git", *app.BitbucketOwner, *app.BitbucketRepository)
-		branch = *app.BitbucketBranch
-	case schema.SourceTypeGitea:
-		if app.GiteaRepository == nil || app.GiteaBranch == nil {
-			return fmt.Errorf("gitea source requires repository and branch")
-		}
-		repoURL = *app.GiteaRepository
-		branch = *app.GiteaBranch
+	if result != nil && result.CommitHash != "" {
+		writeLog(fmt.Sprintf("Commit: %s %s", result.CommitHash[:12], result.CommitMessage))
 	}
 
-	cmd := fmt.Sprintf("git clone --branch %s --depth 1 %s %s", branch, repoURL, buildDir)
-	if app.EnableSubmodules {
-		cmd = fmt.Sprintf("git clone --branch %s --depth 1 --recurse-submodules %s %s", branch, repoURL, buildDir)
-	}
-
-	writeLog(fmt.Sprintf("Cloning %s (branch: %s)", repoURL, branch))
-	_, err := process.ExecAsyncStream(cmd, writeLog)
-	return err
-}
-
-func (s *ApplicationService) cloneCustomGit(app *schema.Application, buildDir string, writeLog func(string)) error {
-	if app.CustomGitURL == nil || app.CustomGitBranch == nil {
-		return fmt.Errorf("custom git source requires URL and branch")
-	}
-
-	cmd := fmt.Sprintf("git clone --branch %s --depth 1 %s %s", *app.CustomGitBranch, *app.CustomGitURL, buildDir)
-	writeLog(fmt.Sprintf("Cloning %s (branch: %s)", *app.CustomGitURL, *app.CustomGitBranch))
-	_, err := process.ExecAsyncStream(cmd, writeLog)
-	return err
+	return nil
 }
 
 func (s *ApplicationService) buildApplication(app *schema.Application, buildDir string, writeLog func(string)) error {

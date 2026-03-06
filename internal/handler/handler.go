@@ -9,6 +9,7 @@ import (
 	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/queue"
 	"github.com/dokploy/dokploy/internal/scheduler"
+	"github.com/dokploy/dokploy/internal/service"
 	"github.com/dokploy/dokploy/internal/traefik"
 	"github.com/labstack/echo/v4"
 )
@@ -22,8 +23,9 @@ type Handler struct {
 	Traefik   *traefik.Manager
 	Notifier  *notify.Notifier
 	Scheduler *scheduler.Scheduler
-	BackupSvc *backup.Service
-	CertsPath string
+	BackupSvc  *backup.Service
+	PreviewSvc *service.PreviewService
+	CertsPath  string
 }
 
 // New creates a new Handler.
@@ -71,6 +73,11 @@ func WithBackupService(b *backup.Service) HandlerOption {
 // WithCertsPath sets the certificates directory path.
 func WithCertsPath(p string) HandlerOption {
 	return func(h *Handler) { h.CertsPath = p }
+}
+
+// WithPreviewService sets the preview deployment service.
+func WithPreviewService(s *service.PreviewService) HandlerOption {
+	return func(h *Handler) { h.PreviewSvc = s }
 }
 
 // RegisterRoutes registers all API routes.

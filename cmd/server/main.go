@@ -60,6 +60,7 @@ func main() {
 	appSvc := service.NewApplicationService(database, dockerClient, cfg)
 	composeSvc := service.NewComposeService(database, dockerClient, cfg)
 	dbSvc := service.NewDatabaseService(database, dockerClient, cfg)
+	previewSvc := service.NewPreviewService(database, dockerClient, cfg, traefikMgr)
 
 	// Initialize backup service with cron scheduler
 	backupSvc := backup.NewService(database, cfg, notifier)
@@ -146,6 +147,7 @@ func main() {
 		handler.WithCertsPath(cfg.Paths.CertificatesPath),
 		handler.WithScheduler(sched),
 		handler.WithBackupService(backupSvc),
+		handler.WithPreviewService(previewSvc),
 	)
 	h.RegisterRoutes(e)
 

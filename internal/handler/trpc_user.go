@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -120,20 +121,20 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		}
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
-		allowed := map[string]string{
-			"firstName": "firstName",
-			"lastName":  "lastName",
-			"image":     "image",
-		}
-		updates := map[string]interface{}{}
-		for k, col := range allowed {
-			if v, ok := in[k]; ok {
-				updates[col] = v
+		allowed := []string{"firstName", "lastName", "image"}
+		// Build raw SQL to avoid GORM NamingStrategy converting camelCase to snake_case
+		var setClauses []string
+		var args []interface{}
+		for _, col := range allowed {
+			if v, ok := in[col]; ok {
+				setClauses = append(setClauses, fmt.Sprintf("\"%s\" = ?", col))
+				args = append(args, v)
 			}
 		}
-		if len(updates) > 0 {
-			// Use Table() to bypass GORM's NamingStrategy (camelCase column names)
-			h.DB.Table("\"user\"").Where("id = ?", user.ID).Updates(updates)
+		if len(setClauses) > 0 {
+			args = append(args, user.ID)
+			query := fmt.Sprintf(`UPDATE "user" SET %s WHERE id = ?`, strings.Join(setClauses, ", "))
+			h.DB.Exec(query, args...)
 		}
 		return true, nil
 	}

@@ -150,7 +150,8 @@ func (h *Handler) DeploymentLogs(c echo.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, scanner.Bytes()); err != nil {
+		line := append(scanner.Bytes(), '\n')
+		if err := conn.WriteMessage(websocket.TextMessage, line); err != nil {
 			return nil
 		}
 	}
@@ -290,7 +291,8 @@ func (h *Handler) streamLogsLocal(ctx context.Context, conn *websocket.Conn, arg
 		if ctx.Err() != nil {
 			break
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, scanner.Bytes()); err != nil {
+		line := append(scanner.Bytes(), '\n')
+		if err := conn.WriteMessage(websocket.TextMessage, line); err != nil {
 			break
 		}
 	}
@@ -363,7 +365,8 @@ func (h *Handler) streamLogsViaSSH(ctx context.Context, conn *websocket.Conn, se
 		if ctx.Err() != nil {
 			break
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, scanner.Bytes()); err != nil {
+		line := append(scanner.Bytes(), '\n')
+		if err := conn.WriteMessage(websocket.TextMessage, line); err != nil {
 			break
 		}
 	}

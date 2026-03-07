@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -420,6 +421,9 @@ func (h *Handler) buildRegistry() procedureRegistry {
 	// ===================== SIMPLE CRUD ROUTERS =====================
 	h.registerSimpleCRUDTRPC(r, getDefaultMember)
 
+	// ===================== ALL MISSING ENDPOINTS =====================
+	h.registerMissingEndpoints(r, getDefaultMember)
+
 	// ===================== SSO =====================
 	r["sso.showSignInWithSSO"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return false, nil
@@ -813,6 +817,52 @@ func (h *Handler) registerDeploymentTRPC(r procedureRegistry) {
 			deployments = []schema.Deployment{}
 		}
 		return deployments, nil
+	}
+
+	r["deployment.allCentralized"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var deployments []schema.Deployment
+		h.DB.
+			Preload("Application").
+			Preload("Application.Environment").
+			Preload("Application.Server").
+			Preload("Compose").
+			Preload("Compose.Environment").
+			Preload("Compose.Server").
+			Preload("Server").
+			Preload("BuildServer").
+			Order("\"createdAt\" DESC").Limit(50).Find(&deployments)
+		if deployments == nil {
+			deployments = []schema.Deployment{}
+		}
+
+		// Manually load Environment.Project for Application and Compose (camelCase PK workaround)
+		for i := range deployments {
+			if deployments[i].Application != nil && deployments[i].Application.Environment != nil {
+				env := deployments[i].Application.Environment
+				if env.ProjectID != "" {
+					var project schema.Project
+					if err := h.DB.First(&project, "\"projectId\" = ?", env.ProjectID).Error; err == nil {
+						env.Project = &project
+					}
+				}
+			}
+			if deployments[i].Compose != nil && deployments[i].Compose.Environment != nil {
+				env := deployments[i].Compose.Environment
+				if env.ProjectID != "" {
+					var project schema.Project
+					if err := h.DB.First(&project, "\"projectId\" = ?", env.ProjectID).Error; err == nil {
+						env.Project = &project
+					}
+				}
+			}
+		}
+
+		return deployments, nil
+	}
+
+	r["deployment.queueList"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// Return empty queue for now - actual queue implementation depends on deployment queue system
+		return []interface{}{}, nil
 	}
 }
 
@@ -1455,7 +1505,7 @@ func (h *Handler) registerNotificationTRPC(r procedureRegistry) {
 }
 
 func (h *Handler) registerGitProviderTRPC(r procedureRegistry, getDefaultMember func(echo.Context) (*schema.Member, error)) {
-	r["gitProvider.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["gitProvider.getAll"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := getDefaultMember(c)
 		if err != nil {
 			return nil, err
@@ -1465,6 +1515,20 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry, getDefaultMember 
 			Where("\"organizationId\" = ?", member.OrganizationID).
 			Find(&providers)
 		return providers, nil
+	}
+
+	r["gitProvider.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var req struct {
+			GitProviderID string `json:"gitProviderId"`
+		}
+		if err := json.Unmarshal(input, &req); err != nil || req.GitProviderID == "" {
+			return nil, echo.NewHTTPError(400, "gitProviderId is required")
+		}
+		result := h.DB.Delete(&schema.GitProvider{}, "\"gitProviderId\" = ?", req.GitProviderID)
+		if result.Error != nil {
+			return nil, result.Error
+		}
+		return map[string]bool{"ok": true}, nil
 	}
 
 	// GitHub
@@ -1602,31 +1666,96 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry, getDefaultMember 
 	}
 }
 
-// registerDatabaseTRPC registers generic CRUD procedures for database services.
+// findDatabaseService queries a database service by ID with all relations preloaded.
+// Matches TS findXxxById(): environment (with project), mounts, server, backups (with destination).
+func (h *Handler) findDatabaseService(model interface{}, idField, id string) error {
+	quotedID := fmt.Sprintf("\"%s\"", idField)
+	query := h.DB.
+		Preload("Environment").
+		Preload("Server").
+		Preload("Mounts")
+
+	// All DB services except Redis have backups
+	switch model.(type) {
+	case *schema.Postgres, *schema.MySQL, *schema.MariaDB, *schema.Mongo:
+		query = query.Preload("Backups").Preload("Backups.Destination")
+	}
+
+	if err := query.Where(quotedID+" = ?", id).First(model).Error; err != nil {
+		return err
+	}
+
+	// Manually load Environment.Project (camelCase PK issue with GORM Preload)
+	type withEnv interface{ GetEnvironmentID() string }
+	if we, ok := model.(withEnv); ok {
+		envID := we.GetEnvironmentID()
+		if envID != "" {
+			var env schema.Environment
+			if err := h.DB.First(&env, "\"environmentId\" = ?", envID).Error; err == nil {
+				if env.ProjectID != "" {
+					var project schema.Project
+					h.DB.First(&project, "\"projectId\" = ?", env.ProjectID)
+					env.Project = &project
+				}
+				// Set back via reflection-free approach per type
+				switch m := model.(type) {
+				case *schema.Postgres:
+					m.Environment = &env
+				case *schema.MySQL:
+					m.Environment = &env
+				case *schema.MariaDB:
+					m.Environment = &env
+				case *schema.Mongo:
+					m.Environment = &env
+				case *schema.Redis:
+					m.Environment = &env
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// registerDatabaseTRPC registers CRUD procedures for database services.
+// Uses proper struct models with Preload, matching TS findXxxById() behavior.
 func (h *Handler) registerDatabaseTRPC(r procedureRegistry, routerName, modelPrefix, idField string) {
 	tableName := strings.ToLower(modelPrefix)
 	quotedID := fmt.Sprintf("\"%s\"", idField)
+
+	// Helper to create a new model instance by type
+	newModel := func() interface{} {
+		switch routerName {
+		case "postgres":
+			return &schema.Postgres{}
+		case "mysql":
+			return &schema.MySQL{}
+		case "mariadb":
+			return &schema.MariaDB{}
+		case "mongo":
+			return &schema.Mongo{}
+		case "redis":
+			return &schema.Redis{}
+		}
+		return nil
+	}
 
 	r[routerName+".one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in[idField].(string)
 
-		var result map[string]interface{}
-		err := h.DB.Table(tableName).
-			Where(quotedID+" = ?", id).
-			First(&result).Error
-		if err != nil {
+		model := newModel()
+		if err := h.findDatabaseService(model, idField, id); err != nil {
 			return nil, &trpcErr{modelPrefix + " not found", "NOT_FOUND", 404}
 		}
-		return result, nil
+		return model, nil
 	}
 
 	r[routerName+".remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in[idField].(string)
-		h.DB.Table(tableName).Where(quotedID+" = ?", id).Delete(nil)
+		h.DB.Exec(fmt.Sprintf("DELETE FROM \"%s\" WHERE %s = ?", tableName, quotedID), id)
 		return true, nil
 	}
 
@@ -1640,7 +1769,6 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry, routerName, modelPre
 	}
 
 	r[routerName+".deploy"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		// Database deploy = restart the container
 		return true, nil
 	}
 
@@ -1663,7 +1791,7 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry, routerName, modelPre
 		json.Unmarshal(input, &in)
 		id, _ := in[idField].(string)
 		port := in["externalPort"]
-		h.DB.Table(tableName).Where(quotedID+" = ?", id).Update("externalPort", port)
+		h.DB.Table(tableName).Where(quotedID+" = ?", id).Update("\"externalPort\"", port)
 		return true, nil
 	}
 
@@ -1672,7 +1800,7 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry, routerName, modelPre
 		json.Unmarshal(input, &in)
 		id, _ := in[idField].(string)
 		status, _ := in["applicationStatus"].(string)
-		h.DB.Table(tableName).Where(quotedID+" = ?", id).Update("applicationStatus", status)
+		h.DB.Table(tableName).Where(quotedID+" = ?", id).Update("\"applicationStatus\"", status)
 		return true, nil
 	}
 }
@@ -1785,6 +1913,88 @@ func (h *Handler) registerSimpleCRUDTRPC(r procedureRegistry, getDefaultMember f
 		json.Unmarshal(input, &in)
 		h.DB.Delete(&schema.Registry{}, "\"registryId\" = ?", in.RegistryID)
 		return true, nil
+	}
+
+	r["registry.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in map[string]interface{}
+		json.Unmarshal(input, &in)
+		id, _ := in["registryId"].(string)
+		delete(in, "registryId")
+		var reg schema.Registry
+		if err := h.DB.First(&reg, "\"registryId\" = ?", id).Error; err != nil {
+			return nil, &trpcErr{"Registry not found", "NOT_FOUND", 404}
+		}
+		h.DB.Model(&reg).Updates(in)
+		return reg, nil
+	}
+
+	r["registry.testRegistry"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			Username     string  `json:"username"`
+			Password     string  `json:"password"`
+			RegistryURL  string  `json:"registryUrl"`
+			RegistryName string  `json:"registryName"`
+			RegistryType string  `json:"registryType"`
+			ImagePrefix  *string `json:"imagePrefix"`
+			ServerID     *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		args := []string{"login", in.RegistryURL, "--username", in.Username, "--password-stdin"}
+		cmd := exec.CommandContext(c.Request().Context(), "docker", args...)
+		cmd.Stdin = strings.NewReader(in.Password)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, &trpcErr{string(output), "BAD_REQUEST", 400}
+		}
+		return true, nil
+	}
+
+	r["registry.testRegistryById"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			RegistryID string  `json:"registryId"`
+			ServerID   *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		var reg schema.Registry
+		if err := h.DB.First(&reg, "\"registryId\" = ?", in.RegistryID).Error; err != nil {
+			return nil, &trpcErr{"Registry not found", "NOT_FOUND", 404}
+		}
+
+		args := []string{"login", reg.RegistryURL, "--username", reg.Username, "--password-stdin"}
+		cmd := exec.CommandContext(c.Request().Context(), "docker", args...)
+		cmd.Stdin = strings.NewReader(reg.Password)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, &trpcErr{string(output), "BAD_REQUEST", 400}
+		}
+		return true, nil
+	}
+
+	// Server helper queries
+	r["server.withSSHKey"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var servers []schema.Server
+		h.DB.Preload("SSHKey").
+			Where("\"organizationId\" = ? AND \"sshKeyId\" IS NOT NULL", member.OrganizationID).
+			Find(&servers)
+		return servers, nil
+	}
+
+	r["server.buildServers"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var servers []schema.Server
+		h.DB.Preload("SSHKey").
+			Where("\"organizationId\" = ? AND \"serverRole\" = ?", member.OrganizationID, "build").
+			Find(&servers)
+		return servers, nil
 	}
 
 	// Destination

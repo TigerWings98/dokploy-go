@@ -36,14 +36,14 @@ func (h *Handler) CreateSchedule(c echo.Context) error {
 	}
 
 	s := &schema.Schedule{
-		Name:          req.Name,
-		CronExpression:      req.CronExpression,
-		Command:       req.Command,
-		Enabled:       req.Enabled,
-		Type:          schema.ScheduleType(req.Type),
-		ApplicationID: req.ApplicationID,
-		ComposeID:     req.ComposeID,
-		ServerID:      req.ServerID,
+		Name:           req.Name,
+		CronExpression: req.CronExpression,
+		Command:        req.Command,
+		Enabled:        req.Enabled,
+		ScheduleType:   req.Type,
+		ApplicationID:  req.ApplicationID,
+		ComposeID:      req.ComposeID,
+		ServerID:       req.ServerID,
 	}
 
 	if err := h.DB.Create(s).Error; err != nil {

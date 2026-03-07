@@ -3,40 +3,64 @@ package schema
 import (
 	"time"
 
+	"github.com/lib/pq"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"gorm.io/gorm"
 )
 
-// Postgres represents the postgres table.
+// ========== Shared Swarm fields (embedded struct) ==========
+
+// SwarmConfig contains Docker Swarm orchestration fields shared by all database services.
+type SwarmConfig struct {
+	HealthCheckSwarm     JSONField[interface{}]   `gorm:"column:healthCheckSwarm;type:jsonb" json:"healthCheckSwarm"`
+	RestartPolicySwarm   JSONField[interface{}]   `gorm:"column:restartPolicySwarm;type:jsonb" json:"restartPolicySwarm"`
+	PlacementSwarm       JSONField[interface{}]   `gorm:"column:placementSwarm;type:jsonb" json:"placementSwarm"`
+	UpdateConfigSwarm    JSONField[interface{}]   `gorm:"column:updateConfigSwarm;type:jsonb" json:"updateConfigSwarm"`
+	RollbackConfigSwarm  JSONField[interface{}]   `gorm:"column:rollbackConfigSwarm;type:jsonb" json:"rollbackConfigSwarm"`
+	ModeSwarm            JSONField[interface{}]   `gorm:"column:modeSwarm;type:jsonb" json:"modeSwarm"`
+	LabelsSwarm          JSONField[interface{}]   `gorm:"column:labelsSwarm;type:jsonb" json:"labelsSwarm"`
+	NetworkSwarm         JSONField[[]interface{}] `gorm:"column:networkSwarm;type:jsonb" json:"networkSwarm"`
+	StopGracePeriodSwarm *int64                   `gorm:"column:stopGracePeriodSwarm" json:"stopGracePeriodSwarm"`
+	EndpointSpecSwarm    JSONField[interface{}]   `gorm:"column:endpointSpecSwarm;type:jsonb" json:"endpointSpecSwarm"`
+	UlimitsSwarm         JSONField[interface{}]   `gorm:"column:ulimitsSwarm;type:jsonb" json:"ulimitsSwarm"`
+	Replicas             int                      `gorm:"column:replicas;not null;default:1" json:"replicas"`
+}
+
+// ========== Postgres ==========
+
 type Postgres struct {
-	PostgresID     string            `gorm:"column:postgresId;primaryKey;type:text" json:"postgresId"`
-	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:postgres_appName_unique" json:"appName"`
-	Description    *string           `gorm:"column:description;type:text" json:"description"`
-	DatabaseName   string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
-	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
-	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
-	DockerImage    string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
-	Command        *string           `gorm:"column:command;type:text" json:"command"`
-	Env            *string           `gorm:"column:env;type:text" json:"env"`
-	MemoryReservation *string        `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
-	MemoryLimit    *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
-	CPUReservation *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
-	CPULimit       *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
-	ExternalPort   *int              `gorm:"column:externalPort" json:"externalPort"`
+	PostgresID        string            `gorm:"column:postgresId;primaryKey;type:text" json:"postgresId"`
+	Name              string            `gorm:"column:name;type:text;not null" json:"name"`
+	AppName           string            `gorm:"column:appName;type:text;not null;uniqueIndex:postgres_appName_unique" json:"appName"`
+	Description       *string           `gorm:"column:description;type:text" json:"description"`
+	DatabaseName      string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
+	DatabaseUser      string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
+	DatabasePassword  string            `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
+	DockerImage       string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
+	Command           *string           `gorm:"column:command;type:text" json:"command"`
+	Args              pq.StringArray    `gorm:"column:args;type:text[]" json:"args"`
+	Env               *string           `gorm:"column:env;type:text" json:"env"`
+	MemoryReservation *string           `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
+	MemoryLimit       *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
+	CPUReservation    *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
+	CPULimit          *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
+	ExternalPort      *int              `gorm:"column:externalPort" json:"externalPort"`
 	ApplicationStatus ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
-	CreatedAt      string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	EnvironmentID  string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
-	ServerID       *string           `gorm:"column:serverId;type:text" json:"serverId"`
+	CreatedAt         string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	EnvironmentID     string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
+	ServerID          *string           `gorm:"column:serverId;type:text" json:"serverId"`
+
+	SwarmConfig
 
 	// Relations
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:PostgresID" json:"mounts,omitempty"`
-	Backups     []Backup     `gorm:"foreignKey:PostgresID" json:"backups,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:PostgresID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:PostgresID" json:"backups"`
 }
 
-func (Postgres) TableName() string { return "postgres" }
+func (Postgres) TableName() string              { return "postgres" }
+func (p *Postgres) GetEnvironmentID() string     { return p.EnvironmentID }
 
 func (p *Postgres) BeforeCreate(tx *gorm.DB) error {
 	if p.PostgresID == "" {
@@ -51,36 +75,41 @@ func (p *Postgres) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// MySQL represents the mysql table.
+// ========== MySQL ==========
+
 type MySQL struct {
-	MySQLID        string            `gorm:"column:mysqlId;primaryKey;type:text" json:"mysqlId"`
-	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:mysql_appName_unique" json:"appName"`
-	Description    *string           `gorm:"column:description;type:text" json:"description"`
-	DatabaseName   string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
-	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
-	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
-	DatabaseRootPassword string      `gorm:"column:databaseRootPassword;type:text;not null" json:"databaseRootPassword"`
-	DockerImage    string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
-	Command        *string           `gorm:"column:command;type:text" json:"command"`
-	Env            *string           `gorm:"column:env;type:text" json:"env"`
-	MemoryReservation *string        `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
-	MemoryLimit    *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
-	CPUReservation *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
-	CPULimit       *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
-	ExternalPort   *int              `gorm:"column:externalPort" json:"externalPort"`
-	ApplicationStatus ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
-	CreatedAt      string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	EnvironmentID  string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
-	ServerID       *string           `gorm:"column:serverId;type:text" json:"serverId"`
+	MySQLID              string            `gorm:"column:mysqlId;primaryKey;type:text" json:"mysqlId"`
+	Name                 string            `gorm:"column:name;type:text;not null" json:"name"`
+	AppName              string            `gorm:"column:appName;type:text;not null;uniqueIndex:mysql_appName_unique" json:"appName"`
+	Description          *string           `gorm:"column:description;type:text" json:"description"`
+	DatabaseName         string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
+	DatabaseUser         string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
+	DatabasePassword     string            `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
+	DatabaseRootPassword string            `gorm:"column:rootPassword;type:text;not null" json:"databaseRootPassword"`
+	DockerImage          string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
+	Command              *string           `gorm:"column:command;type:text" json:"command"`
+	Args                 pq.StringArray    `gorm:"column:args;type:text[]" json:"args"`
+	Env                  *string           `gorm:"column:env;type:text" json:"env"`
+	MemoryReservation    *string           `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
+	MemoryLimit          *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
+	CPUReservation       *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
+	CPULimit             *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
+	ExternalPort         *int              `gorm:"column:externalPort" json:"externalPort"`
+	ApplicationStatus    ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
+	CreatedAt            string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	EnvironmentID        string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
+	ServerID             *string           `gorm:"column:serverId;type:text" json:"serverId"`
+
+	SwarmConfig
 
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:MySQLID" json:"mounts,omitempty"`
-	Backups     []Backup     `gorm:"foreignKey:MySQLID" json:"backups,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:MySQLID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:MySQLID" json:"backups"`
 }
 
-func (MySQL) TableName() string { return "mysql" }
+func (MySQL) TableName() string            { return "mysql" }
+func (m *MySQL) GetEnvironmentID() string  { return m.EnvironmentID }
 
 func (m *MySQL) BeforeCreate(tx *gorm.DB) error {
 	if m.MySQLID == "" {
@@ -95,36 +124,41 @@ func (m *MySQL) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// MariaDB represents the mariadb table.
+// ========== MariaDB ==========
+
 type MariaDB struct {
-	MariaDBID      string            `gorm:"column:mariadbId;primaryKey;type:text" json:"mariadbId"`
-	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:mariadb_appName_unique" json:"appName"`
-	Description    *string           `gorm:"column:description;type:text" json:"description"`
-	DatabaseName   string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
-	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
-	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
-	DatabaseRootPassword string      `gorm:"column:databaseRootPassword;type:text;not null" json:"databaseRootPassword"`
-	DockerImage    string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
-	Command        *string           `gorm:"column:command;type:text" json:"command"`
-	Env            *string           `gorm:"column:env;type:text" json:"env"`
-	MemoryReservation *string        `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
-	MemoryLimit    *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
-	CPUReservation *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
-	CPULimit       *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
-	ExternalPort   *int              `gorm:"column:externalPort" json:"externalPort"`
-	ApplicationStatus ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
-	CreatedAt      string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	EnvironmentID  string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
-	ServerID       *string           `gorm:"column:serverId;type:text" json:"serverId"`
+	MariaDBID            string            `gorm:"column:mariadbId;primaryKey;type:text" json:"mariadbId"`
+	Name                 string            `gorm:"column:name;type:text;not null" json:"name"`
+	AppName              string            `gorm:"column:appName;type:text;not null;uniqueIndex:mariadb_appName_unique" json:"appName"`
+	Description          *string           `gorm:"column:description;type:text" json:"description"`
+	DatabaseName         string            `gorm:"column:databaseName;type:text;not null" json:"databaseName"`
+	DatabaseUser         string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
+	DatabasePassword     string            `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
+	DatabaseRootPassword string            `gorm:"column:rootPassword;type:text;not null" json:"databaseRootPassword"`
+	DockerImage          string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
+	Command              *string           `gorm:"column:command;type:text" json:"command"`
+	Args                 pq.StringArray    `gorm:"column:args;type:text[]" json:"args"`
+	Env                  *string           `gorm:"column:env;type:text" json:"env"`
+	MemoryReservation    *string           `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
+	MemoryLimit          *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
+	CPUReservation       *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
+	CPULimit             *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
+	ExternalPort         *int              `gorm:"column:externalPort" json:"externalPort"`
+	ApplicationStatus    ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
+	CreatedAt            string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	EnvironmentID        string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
+	ServerID             *string           `gorm:"column:serverId;type:text" json:"serverId"`
+
+	SwarmConfig
 
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:MariaDBID" json:"mounts,omitempty"`
-	Backups     []Backup     `gorm:"foreignKey:MariaDBID" json:"backups,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:MariaDBID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:MariaDBID" json:"backups"`
 }
 
-func (MariaDB) TableName() string { return "mariadb" }
+func (MariaDB) TableName() string              { return "mariadb" }
+func (m *MariaDB) GetEnvironmentID() string    { return m.EnvironmentID }
 
 func (m *MariaDB) BeforeCreate(tx *gorm.DB) error {
 	if m.MariaDBID == "" {
@@ -139,34 +173,40 @@ func (m *MariaDB) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Mongo represents the mongo table.
+// ========== Mongo ==========
+
 type Mongo struct {
-	MongoID        string            `gorm:"column:mongoId;primaryKey;type:text" json:"mongoId"`
-	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:mongo_appName_unique" json:"appName"`
-	Description    *string           `gorm:"column:description;type:text" json:"description"`
-	DatabaseUser   string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
-	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
-	DockerImage    string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
-	Command        *string           `gorm:"column:command;type:text" json:"command"`
-	Env            *string           `gorm:"column:env;type:text" json:"env"`
-	MemoryReservation *string        `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
-	MemoryLimit    *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
-	CPUReservation *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
-	CPULimit       *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
-	ExternalPort   *int              `gorm:"column:externalPort" json:"externalPort"`
+	MongoID           string            `gorm:"column:mongoId;primaryKey;type:text" json:"mongoId"`
+	Name              string            `gorm:"column:name;type:text;not null" json:"name"`
+	AppName           string            `gorm:"column:appName;type:text;not null;uniqueIndex:mongo_appName_unique" json:"appName"`
+	Description       *string           `gorm:"column:description;type:text" json:"description"`
+	DatabaseUser      string            `gorm:"column:databaseUser;type:text;not null" json:"databaseUser"`
+	DatabasePassword  string            `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
+	DockerImage       string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
+	Command           *string           `gorm:"column:command;type:text" json:"command"`
+	Args              pq.StringArray    `gorm:"column:args;type:text[]" json:"args"`
+	Env               *string           `gorm:"column:env;type:text" json:"env"`
+	MemoryReservation *string           `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
+	MemoryLimit       *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
+	CPUReservation    *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
+	CPULimit          *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
+	ExternalPort      *int              `gorm:"column:externalPort" json:"externalPort"`
 	ApplicationStatus ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
-	CreatedAt      string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	EnvironmentID  string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
-	ServerID       *string           `gorm:"column:serverId;type:text" json:"serverId"`
+	CreatedAt         string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	EnvironmentID     string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
+	ServerID          *string           `gorm:"column:serverId;type:text" json:"serverId"`
+	ReplicaSets       bool              `gorm:"column:replicaSets;not null;default:false" json:"replicaSets"`
+
+	SwarmConfig
 
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:MongoID" json:"mounts,omitempty"`
-	Backups     []Backup     `gorm:"foreignKey:MongoID" json:"backups,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:MongoID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:MongoID" json:"backups"`
 }
 
-func (Mongo) TableName() string { return "mongo" }
+func (Mongo) TableName() string              { return "mongo" }
+func (m *Mongo) GetEnvironmentID() string    { return m.EnvironmentID }
 
 func (m *Mongo) BeforeCreate(tx *gorm.DB) error {
 	if m.MongoID == "" {
@@ -181,32 +221,37 @@ func (m *Mongo) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Redis represents the redis table.
+// ========== Redis ==========
+
 type Redis struct {
-	RedisID        string            `gorm:"column:redisId;primaryKey;type:text" json:"redisId"`
-	Name           string            `gorm:"column:name;type:text;not null" json:"name"`
-	AppName        string            `gorm:"column:appName;type:text;not null;uniqueIndex:redis_appName_unique" json:"appName"`
-	Description    *string           `gorm:"column:description;type:text" json:"description"`
-	DatabasePassword string          `gorm:"column:databasePassword;type:text;not null" json:"databasePassword"`
-	DockerImage    string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
-	Command        *string           `gorm:"column:command;type:text" json:"command"`
-	Env            *string           `gorm:"column:env;type:text" json:"env"`
-	MemoryReservation *string        `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
-	MemoryLimit    *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
-	CPUReservation *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
-	CPULimit       *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
-	ExternalPort   *int              `gorm:"column:externalPort" json:"externalPort"`
+	RedisID           string            `gorm:"column:redisId;primaryKey;type:text" json:"redisId"`
+	Name              string            `gorm:"column:name;type:text;not null" json:"name"`
+	AppName           string            `gorm:"column:appName;type:text;not null;uniqueIndex:redis_appName_unique" json:"appName"`
+	Description       *string           `gorm:"column:description;type:text" json:"description"`
+	DatabasePassword  string            `gorm:"column:password;type:text;not null" json:"databasePassword"`
+	DockerImage       string            `gorm:"column:dockerImage;type:text;not null" json:"dockerImage"`
+	Command           *string           `gorm:"column:command;type:text" json:"command"`
+	Args              pq.StringArray    `gorm:"column:args;type:text[]" json:"args"`
+	Env               *string           `gorm:"column:env;type:text" json:"env"`
+	MemoryReservation *string           `gorm:"column:memoryReservation;type:text" json:"memoryReservation"`
+	MemoryLimit       *string           `gorm:"column:memoryLimit;type:text" json:"memoryLimit"`
+	CPUReservation    *string           `gorm:"column:cpuReservation;type:text" json:"cpuReservation"`
+	CPULimit          *string           `gorm:"column:cpuLimit;type:text" json:"cpuLimit"`
+	ExternalPort      *int              `gorm:"column:externalPort" json:"externalPort"`
 	ApplicationStatus ApplicationStatus `gorm:"column:applicationStatus;type:text;not null;default:'idle'" json:"applicationStatus"`
-	CreatedAt      string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	EnvironmentID  string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
-	ServerID       *string           `gorm:"column:serverId;type:text" json:"serverId"`
+	CreatedAt         string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	EnvironmentID     string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
+	ServerID          *string           `gorm:"column:serverId;type:text" json:"serverId"`
+
+	SwarmConfig
 
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:RedisID" json:"mounts,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:RedisID" json:"mounts"`
 }
 
-func (Redis) TableName() string { return "redis" }
+func (Redis) TableName() string              { return "redis" }
+func (r *Redis) GetEnvironmentID() string    { return r.EnvironmentID }
 
 func (r *Redis) BeforeCreate(tx *gorm.DB) error {
 	if r.RedisID == "" {

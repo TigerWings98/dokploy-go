@@ -69,16 +69,22 @@ func (r *Rollback) BeforeCreate(tx *gorm.DB) error {
 
 // Schedule represents the schedule table.
 type Schedule struct {
-	ScheduleID string       `gorm:"column:scheduleId;primaryKey;type:text" json:"scheduleId"`
-	Name       string       `gorm:"column:name;type:text;not null" json:"name"`
-	CronExpression string   `gorm:"column:cronExpression;type:text;not null" json:"cronExpression"`
-	Command    string       `gorm:"column:command;type:text;not null" json:"command"`
-	Enabled    bool         `gorm:"column:enabled;not null;default:true" json:"enabled"`
-	Type       ScheduleType `gorm:"column:type;type:text;not null" json:"type"`
-	CreatedAt  string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	ApplicationID *string   `gorm:"column:applicationId;type:text" json:"applicationId"`
-	ComposeID  *string      `gorm:"column:composeId;type:text" json:"composeId"`
-	ServerID   *string      `gorm:"column:serverId;type:text" json:"serverId"`
+	ScheduleID     string  `gorm:"column:scheduleId;primaryKey;type:text" json:"scheduleId"`
+	Name           string  `gorm:"column:name;type:text;not null" json:"name"`
+	CronExpression string  `gorm:"column:cronExpression;type:text;not null" json:"cronExpression"`
+	AppName        string  `gorm:"column:appName;type:text;not null" json:"appName"`
+	ServiceName    *string `gorm:"column:serviceName;type:text" json:"serviceName"`
+	ShellType      string  `gorm:"column:shellType;type:text;not null;default:bash" json:"shellType"`
+	ScheduleType   string  `gorm:"column:scheduleType;type:text;not null;default:application" json:"scheduleType"`
+	Command        string  `gorm:"column:command;type:text;not null" json:"command"`
+	Script         *string `gorm:"column:script;type:text" json:"script"`
+	Enabled        bool    `gorm:"column:enabled;not null;default:true" json:"enabled"`
+	Timezone       *string `gorm:"column:timezone;type:text" json:"timezone"`
+	CreatedAt      string  `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	ApplicationID  *string `gorm:"column:applicationId;type:text" json:"applicationId"`
+	ComposeID      *string `gorm:"column:composeId;type:text" json:"composeId"`
+	ServerID       *string `gorm:"column:serverId;type:text" json:"serverId"`
+	UserID         *string `gorm:"column:userId;type:text" json:"userId"`
 
 	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
 	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`

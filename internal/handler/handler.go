@@ -197,7 +197,7 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 	// tRPC compatibility layer (matches frontend's tRPC client calls)
 	trpc := e.Group("/api/trpc")
-	trpc.Use(mw.AuthMiddleware(h.Auth))
+	trpc.Use(mw.TRPCAuthMiddleware(h.Auth, "settings.health", "sso.showSignInWithSSO", "compose.templates"))
 	trpc.Any("/:procedures", h.HandleTRPC)
 
 	// Webhook routes (public, no auth)

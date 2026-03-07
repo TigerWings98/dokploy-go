@@ -80,7 +80,12 @@ func main() {
 	// Initialize task queue (optional - requires Redis)
 	redisAddr := os.Getenv("REDIS_URL")
 	if redisAddr == "" {
-		redisAddr = "localhost:6379"
+		// In production Docker, Redis runs as "dokploy-redis" service
+		redisHost := os.Getenv("REDIS_HOST")
+		if redisHost == "" {
+			redisHost = "dokploy-redis"
+		}
+		redisAddr = redisHost + ":6379"
 	}
 
 	var q *queue.Queue
@@ -164,7 +169,7 @@ func main() {
 	h.RegisterRoutes(e)
 
 	// Register WebSocket routes
-	wsHandler := ws.NewHandler(database, dockerClient, a)
+	wsHandler := ws.NewHandler(database, dockerClient, a, cfg.Paths.MonitoringPath)
 	wsHandler.RegisterRoutes(e)
 
 	// Register frontend routes (must be last - catches all unmatched routes)

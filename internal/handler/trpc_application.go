@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/ws"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -298,9 +299,15 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 	}
 
 	r["application.readAppMonitoring"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{
-			"data": []interface{}{},
-		}, nil
+		var in struct {
+			AppName string `json:"appName"`
+		}
+		json.Unmarshal(input, &in)
+		monPath := ""
+		if h.Config != nil {
+			monPath = h.Config.Paths.MonitoringPath
+		}
+		return ws.ReadAllStats(monPath, in.AppName), nil
 	}
 
 	r["application.search"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

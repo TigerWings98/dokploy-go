@@ -67,6 +67,11 @@ func (h *Handler) RegisterFrontendRoutes(e *echo.Echo) {
 			return echo.NewHTTPError(http.StatusNotFound)
 		}
 
+		// Redirect unauthenticated users from protected pages to login
+		if strings.HasPrefix(path, "/dashboard/") && !h.isAuthenticated(c) {
+			return c.Redirect(http.StatusFound, "/")
+		}
+
 		// 1. Try exact file match (JS, CSS, images, etc.)
 		filePath := filepath.Join(distDir, path)
 		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {

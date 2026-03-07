@@ -5,6 +5,7 @@ import (
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
+	"gorm.io/gorm"
 )
 
 func (h *Handler) registerScheduleTRPC(r procedureRegistry) {
@@ -60,6 +61,45 @@ func (h *Handler) registerScheduleTRPC(r procedureRegistry) {
 			h.Scheduler.ReloadSchedule(id)
 		}
 		return true, nil
+	}
+
+	r["schedule.list"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ID           string `json:"id"`
+			ScheduleType string `json:"scheduleType"`
+		}
+		json.Unmarshal(input, &in)
+
+		var schedules []schema.Schedule
+		q := h.DB.Preload("Application").Preload("Server").Preload("Compose").
+			Preload("Deployments", func(db *gorm.DB) *gorm.DB {
+				return db.Order("\"createdAt\" DESC")
+			})
+
+		switch in.ScheduleType {
+		case "application":
+			q = q.Where("\"applicationId\" = ?", in.ID)
+		case "compose":
+			q = q.Where("\"composeId\" = ?", in.ID)
+		case "server":
+			q = q.Where("\"serverId\" = ?", in.ID)
+		case "dokploy-server":
+			q = q.Where("\"userId\" = ?", in.ID)
+		}
+
+		if err := q.Find(&schedules).Error; err != nil {
+			return nil, err
+		}
+		if schedules == nil {
+			schedules = []schema.Schedule{}
+		}
+		// Ensure deployments slices are never null
+		for i := range schedules {
+			if schedules[i].Deployments == nil {
+				schedules[i].Deployments = []schema.Deployment{}
+			}
+		}
+		return schedules, nil
 	}
 
 	r["schedule.runManually"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

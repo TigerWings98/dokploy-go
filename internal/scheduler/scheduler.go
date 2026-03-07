@@ -25,7 +25,7 @@ type Scheduler struct {
 // New creates a new Scheduler.
 func New(database *db.DB, cfg *config.Config) *Scheduler {
 	return &Scheduler{
-		cron: cron.New(cron.WithSeconds()),
+		cron: cron.New(),
 		db:   database,
 		cfg:  cfg,
 		jobs: make(map[string]cron.EntryID),

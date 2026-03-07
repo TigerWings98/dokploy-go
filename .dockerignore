@@ -1,0 +1,29 @@
+# Exclude original TypeScript source (1.4G with node_modules)
+dokploy/
+
+# Git
+.git/
+
+# Build artifacts
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docs & research
+docs/
+research_*.md
+*.jsonl
+
+# Frontend build output (rebuilt in Docker)
+frontend/out/
+frontend/node_modules/
+frontend/.next/
+
+# OS
+.DS_Store
+Thumbs.db

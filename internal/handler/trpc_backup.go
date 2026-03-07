@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
@@ -129,6 +130,43 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		delete(in, "volumeBackupId")
 		h.DB.Model(&schema.VolumeBackup{}).Where("\"volumeBackupId\" = ?", id).Updates(in)
 		return true, nil
+	}
+
+	r["volumeBackups.list"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ID               string `json:"id"`
+			VolumeBackupType string `json:"volumeBackupType"`
+		}
+		json.Unmarshal(input, &in)
+		colMap := map[string]string{
+			"application": "applicationId",
+			"postgres":    "postgresId",
+			"mysql":       "mysqlId",
+			"mariadb":     "mariadbId",
+			"mongo":       "mongoId",
+			"redis":       "redisId",
+			"compose":     "composeId",
+		}
+		col, ok := colMap[in.VolumeBackupType]
+		if !ok {
+			return []schema.VolumeBackup{}, nil
+		}
+		var vbs []schema.VolumeBackup
+		h.DB.Preload("Destination").
+			Preload("Application").Preload("Postgres").Preload("MySQL").
+			Preload("MariaDB").Preload("Mongo").Preload("Redis").Preload("Compose").
+			Where(fmt.Sprintf("\"%s\" = ?", col), in.ID).
+			Order("\"createdAt\" DESC").
+			Find(&vbs)
+		if vbs == nil {
+			vbs = []schema.VolumeBackup{}
+		}
+		for i := range vbs {
+			if vbs[i].Deployments == nil {
+				vbs[i].Deployments = []schema.Deployment{}
+			}
+		}
+		return vbs, nil
 	}
 
 	r["volumeBackups.runManually"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

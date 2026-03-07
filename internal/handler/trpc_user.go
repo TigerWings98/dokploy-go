@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -119,8 +120,10 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		if user == nil {
 			return nil, &trpcErr{"Authentication required", "UNAUTHORIZED", 401}
 		}
+		log.Printf("[user.update] userID=%s rawInput=%s", user.ID, string(input))
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
+		log.Printf("[user.update] parsed fields: %v", in)
 		allowed := []string{"firstName", "lastName", "image"}
 		// Build raw SQL to avoid GORM NamingStrategy converting camelCase to snake_case
 		var setClauses []string
@@ -134,7 +137,13 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		if len(setClauses) > 0 {
 			args = append(args, user.ID)
 			query := fmt.Sprintf(`UPDATE "user" SET %s WHERE id = ?`, strings.Join(setClauses, ", "))
-			h.DB.Exec(query, args...)
+			result := h.DB.Exec(query, args...)
+			if result.Error != nil {
+				return nil, &trpcErr{fmt.Sprintf("Failed to update user: %v", result.Error), "INTERNAL_SERVER_ERROR", 500}
+			}
+			log.Printf("[user.update] query=%s args=%v rows=%d", query, args, result.RowsAffected)
+		} else {
+			log.Printf("[user.update] no fields to update from input: %s", string(input))
 		}
 		return true, nil
 	}

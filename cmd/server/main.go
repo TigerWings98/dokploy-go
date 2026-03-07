@@ -35,11 +35,6 @@ func main() {
 	}
 	defer database.Close()
 
-	// Auto-migrate database schema
-	if err := database.AutoMigrate(); err != nil {
-		log.Fatalf("failed to migrate database: %v", err)
-	}
-
 	// Initialize auth
 	a := auth.New(database)
 

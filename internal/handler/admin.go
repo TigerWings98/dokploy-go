@@ -251,9 +251,10 @@ func (h *Handler) CleanAll(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker not available")
 	}
 	ctx := c.Request().Context()
-	_ = h.Docker.CleanupImages(ctx)
-	_ = h.Docker.CleanupVolumes(ctx)
 	_ = h.Docker.CleanupContainers(ctx)
+	_ = h.Docker.CleanupImages(ctx)
+	_ = h.Docker.CleanupBuildCache(ctx)
+	// Volumes excluded from cleanAll to prevent data loss
 	return c.JSON(http.StatusOK, map[string]string{"message": "Full cleanup completed"})
 }
 
@@ -285,9 +286,7 @@ func (h *Handler) CleanDockerPrune(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "Docker not available")
 	}
 	ctx := c.Request().Context()
-	_ = h.Docker.CleanupImages(ctx)
-	_ = h.Docker.CleanupVolumes(ctx)
-	_ = h.Docker.CleanupContainers(ctx)
+	_ = h.Docker.PruneSystem(ctx)
 	_ = h.Docker.CleanupBuildCache(ctx)
 	return c.JSON(http.StatusOK, map[string]string{"message": "Docker prune completed"})
 }

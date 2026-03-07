@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	mw "github.com/dokploy/dokploy/internal/middleware"
 	"github.com/labstack/echo/v4"
 	gonanoid "github.com/matoous/go-nanoid/v2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func (h *Handler) registerUserTRPC(r procedureRegistry) {
@@ -120,19 +120,46 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		if user == nil {
 			return nil, &trpcErr{"Authentication required", "UNAUTHORIZED", 401}
 		}
-		log.Printf("[user.update] userID=%s rawInput=%s", user.ID, string(input))
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
-		log.Printf("[user.update] parsed fields: %v", in)
-		allowed := []string{"firstName", "lastName", "image"}
+
+		// Handle password change (stored in account table, not user table)
+		if pw, ok := in["password"]; ok && pw != nil {
+			pwStr, _ := pw.(string)
+			if pwStr != "" {
+				// Verify current password
+				var acct schema.Account
+				if err := h.DB.Where("user_id = ?", user.ID).First(&acct).Error; err != nil {
+					return nil, &trpcErr{"Account not found", "BAD_REQUEST", 400}
+				}
+				curPw, _ := in["currentPassword"].(string)
+				if acct.Password == nil || bcrypt.CompareHashAndPassword([]byte(*acct.Password), []byte(curPw)) != nil {
+					return nil, &trpcErr{"Current password is incorrect", "BAD_REQUEST", 400}
+				}
+				hashed, err := bcrypt.GenerateFromPassword([]byte(pwStr), 10)
+				if err != nil {
+					return nil, &trpcErr{"Failed to hash password", "INTERNAL_SERVER_ERROR", 500}
+				}
+				h.DB.Exec(`UPDATE "account" SET "password" = ? WHERE "user_id" = ?`, string(hashed), user.ID)
+			}
+		}
+
+		// Update user table fields
+		allowed := []string{"firstName", "lastName", "image", "email"}
 		// Build raw SQL to avoid GORM NamingStrategy converting camelCase to snake_case
 		var setClauses []string
 		var args []interface{}
 		for _, col := range allowed {
-			if v, ok := in[col]; ok {
-				setClauses = append(setClauses, fmt.Sprintf("\"%s\" = ?", col))
-				args = append(args, v)
+			v, ok := in[col]
+			if !ok {
+				continue
 			}
+			if v == nil {
+				// Treat null as empty string for NOT NULL text columns
+				v = ""
+			}
+			setClauses = append(setClauses, fmt.Sprintf("\"%s\" = ?", col))
+			args = append(args, v)
 		}
 		if len(setClauses) > 0 {
 			args = append(args, user.ID)
@@ -141,9 +168,6 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 			if result.Error != nil {
 				return nil, &trpcErr{fmt.Sprintf("Failed to update user: %v", result.Error), "INTERNAL_SERVER_ERROR", 500}
 			}
-			log.Printf("[user.update] query=%s args=%v rows=%d", query, args, result.RowsAffected)
-		} else {
-			log.Printf("[user.update] no fields to update from input: %s", string(input))
 		}
 		return true, nil
 	}

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"os/exec"
+
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -45,6 +47,9 @@ func (s *Scheduler) InitSchedules() {
 			log.Printf("Failed to add schedule %s: %v", sched.ScheduleID, err)
 		}
 	}
+
+	// Restore docker cleanup cron jobs
+	s.initDockerCleanup()
 
 	s.cron.Start()
 	log.Printf("Scheduler started with %d jobs", len(s.jobs))
@@ -146,6 +151,25 @@ func (s *Scheduler) RunNow(schedule schema.Schedule) {
 	s.executeSchedule(schedule)
 }
 
+// AddFunc adds a named cron job with a plain function (not tied to schema.Schedule).
+func (s *Scheduler) AddFunc(name, cronExpr string, fn func()) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Remove existing job if present
+	if entryID, ok := s.jobs[name]; ok {
+		s.cron.Remove(entryID)
+		delete(s.jobs, name)
+	}
+
+	entryID, err := s.cron.AddFunc(cronExpr, fn)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
+	}
+	s.jobs[name] = entryID
+	return nil
+}
+
 // ReloadSchedule reloads a single schedule from the database.
 func (s *Scheduler) ReloadSchedule(scheduleID string) error {
 	var schedule schema.Schedule
@@ -156,4 +180,56 @@ func (s *Scheduler) ReloadSchedule(scheduleID string) error {
 	}
 
 	return s.AddJob(schedule)
+}
+
+// initDockerCleanup restores docker cleanup cron jobs for settings and servers
+// that had enableDockerCleanup=true before restart.
+func (s *Scheduler) initDockerCleanup() {
+	const cleanupCron = "50 23 * * *"
+	cleanupCmds := []string{
+		"docker container prune --force",
+		"docker image prune --all --force",
+		"docker builder prune --all --force",
+		"docker system prune --all --force",
+	}
+
+	// Check main server settings
+	var settings schema.WebServerSettings
+	if err := s.db.First(&settings).Error; err == nil && settings.EnableDockerCleanup {
+		s.AddFunc("docker-cleanup", cleanupCron, func() {
+			log.Printf("[Docker Cleanup] Running for local server")
+			for _, cmd := range cleanupCmds {
+				c := exec.Command("bash", "-c", cmd)
+				if output, err := c.CombinedOutput(); err != nil {
+					log.Printf("[Docker Cleanup] Local exec failed: %v: %s", err, string(output))
+				}
+			}
+		})
+		log.Println("Docker cleanup cron registered for local server")
+	}
+
+	// Check remote servers
+	var servers []schema.Server
+	s.db.Preload("SSHKey").Where("\"enableDockerCleanup\" = ?", true).Find(&servers)
+	for _, srv := range servers {
+		if srv.SSHKey == nil || srv.ServerStatus == "inactive" {
+			continue
+		}
+		serverID := srv.ServerID
+		conn := process.SSHConnection{
+			Host:       srv.IPAddress,
+			Port:       srv.Port,
+			Username:   srv.Username,
+			PrivateKey: srv.SSHKey.PrivateKey,
+		}
+		s.AddFunc("docker-cleanup-"+serverID, cleanupCron, func() {
+			log.Printf("[Docker Cleanup] Running for server %s", serverID)
+			for _, cmd := range cleanupCmds {
+				if _, err := process.ExecAsyncRemote(conn, cmd, nil); err != nil {
+					log.Printf("[Docker Cleanup] Remote exec failed on %s: %v", serverID, err)
+				}
+			}
+		})
+		log.Printf("Docker cleanup cron registered for server %s", serverID)
+	}
 }

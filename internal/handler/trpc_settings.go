@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -147,40 +148,53 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.cleanUnusedImages"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		if h.Docker != nil {
-			h.Docker.CleanupImages(c.Request().Context())
-		}
+		var in struct{ ServerID *string `json:"serverId"` }
+		json.Unmarshal(input, &in)
+		h.execDockerCleanup(in.ServerID, "docker image prune --all --force")
 		return true, nil
 	}
 
 	r["settings.cleanUnusedVolumes"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		if h.Docker != nil {
-			h.Docker.CleanupVolumes(c.Request().Context())
-		}
+		var in struct{ ServerID *string `json:"serverId"` }
+		json.Unmarshal(input, &in)
+		h.execDockerCleanup(in.ServerID, "docker volume prune --all --force")
 		return true, nil
 	}
 
 	r["settings.cleanStoppedContainers"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		if h.Docker != nil {
-			h.Docker.CleanupContainers(c.Request().Context())
-		}
+		var in struct{ ServerID *string `json:"serverId"` }
+		json.Unmarshal(input, &in)
+		h.execDockerCleanup(in.ServerID, "docker container prune --force")
 		return true, nil
 	}
 
 	r["settings.cleanAll"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		if h.Docker != nil {
-			ctx := c.Request().Context()
-			h.Docker.CleanupImages(ctx)
-			h.Docker.CleanupVolumes(ctx)
-			h.Docker.CleanupContainers(ctx)
+		var in struct{ ServerID *string `json:"serverId"` }
+		json.Unmarshal(input, &in)
+		// Volume cleanup excluded from cleanAll to prevent data loss
+		// (volumes attached to stopped containers could be deleted)
+		// See: https://github.com/Dokploy/dokploy/pull/3267
+		cmds := []string{
+			"docker container prune --force",
+			"docker image prune --all --force",
+			"docker builder prune --all --force",
+			"docker system prune --all --force",
 		}
-		return true, nil
+		go func() {
+			for _, cmd := range cmds {
+				h.execDockerCleanup(in.ServerID, cmd)
+			}
+		}()
+		return map[string]string{
+			"status":  "scheduled",
+			"message": "Docker cleanup has been initiated in the background",
+		}, nil
 	}
 
 	r["settings.cleanDockerBuilder"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		if h.Docker != nil {
-			h.Docker.CleanupBuildCache(c.Request().Context())
-		}
+		var in struct{ ServerID *string `json:"serverId"` }
+		json.Unmarshal(input, &in)
+		h.execDockerCleanup(in.ServerID, "docker builder prune --all --force")
 		return true, nil
 	}
 
@@ -215,12 +229,69 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 			ServerID            *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
+
+		// Daily cleanup at 23:50
+		const cleanupCron = "50 23 * * *"
+
 		if in.ServerID != nil {
 			h.DB.Model(&schema.Server{}).Where("\"serverId\" = ?", *in.ServerID).
 				Update("enableDockerCleanup", in.EnableDockerCleanup)
+
+			jobName := "docker-cleanup-" + *in.ServerID
+			if in.EnableDockerCleanup {
+				// Verify server is active
+				var srv schema.Server
+				if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", *in.ServerID).Error; err != nil {
+					return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
+				}
+				if srv.ServerStatus == "inactive" {
+					return nil, &trpcErr{"Server is inactive", "BAD_REQUEST", 400}
+				}
+				serverID := *in.ServerID
+				if h.Scheduler != nil {
+					h.Scheduler.AddFunc(jobName, cleanupCron, func() {
+						log.Printf("[Docker Cleanup] Running for server %s", serverID)
+						cmds := []string{
+							"docker container prune --force",
+							"docker image prune --all --force",
+							"docker builder prune --all --force",
+							"docker system prune --all --force",
+						}
+						for _, cmd := range cmds {
+							h.execDockerCleanup(&serverID, cmd)
+						}
+					})
+				}
+			} else {
+				if h.Scheduler != nil {
+					h.Scheduler.RemoveJob(jobName)
+				}
+			}
 		} else {
 			settings, _ := h.getOrCreateSettings()
 			h.DB.Model(settings).Update("enableDockerCleanup", in.EnableDockerCleanup)
+
+			jobName := "docker-cleanup"
+			if in.EnableDockerCleanup {
+				if h.Scheduler != nil {
+					h.Scheduler.AddFunc(jobName, cleanupCron, func() {
+						log.Printf("[Docker Cleanup] Running for local server")
+						cmds := []string{
+							"docker container prune --force",
+							"docker image prune --all --force",
+							"docker builder prune --all --force",
+							"docker system prune --all --force",
+						}
+						for _, cmd := range cmds {
+							h.execDockerCleanup(nil, cmd)
+						}
+					})
+				}
+			} else {
+				if h.Scheduler != nil {
+					h.Scheduler.RemoveJob(jobName)
+				}
+			}
 		}
 		return true, nil
 	}
@@ -368,15 +439,17 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.cleanDockerPrune"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		cmd := exec.Command("docker", "system", "prune", "-a", "-f")
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return nil, &trpcErr{string(output), "BAD_REQUEST", 400}
-		}
-		return string(output), nil
+		var in struct{ ServerID *string `json:"serverId"` }
+		json.Unmarshal(input, &in)
+		h.execDockerCleanup(in.ServerID, "docker system prune --all --force")
+		h.execDockerCleanup(in.ServerID, "docker builder prune --all --force")
+		return true, nil
 	}
 
 	r["settings.cleanMonitoring"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		monitoringPath := "/etc/dokploy/monitoring"
+		os.RemoveAll(monitoringPath)
+		os.MkdirAll(monitoringPath, 0755)
 		return true, nil
 	}
 
@@ -488,5 +561,35 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 
 	r["auth.isAdminPresent"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return h.DB.IsAdminPresent(), nil
+	}
+}
+
+// execDockerCleanup runs a docker cleanup command locally or on a remote server via SSH.
+func (h *Handler) execDockerCleanup(serverID *string, command string) {
+	if serverID != nil && *serverID != "" {
+		var srv schema.Server
+		if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", *serverID).Error; err != nil {
+			log.Printf("[Docker Cleanup] Server %s not found: %v", *serverID, err)
+			return
+		}
+		if srv.SSHKey == nil {
+			log.Printf("[Docker Cleanup] Server %s has no SSH key", *serverID)
+			return
+		}
+		conn := process.SSHConnection{
+			Host:       srv.IPAddress,
+			Port:       srv.Port,
+			Username:   srv.Username,
+			PrivateKey: srv.SSHKey.PrivateKey,
+		}
+		_, err := process.ExecAsyncRemote(conn, command, nil)
+		if err != nil {
+			log.Printf("[Docker Cleanup] Remote exec failed on %s: %v", *serverID, err)
+		}
+	} else {
+		cmd := exec.Command("bash", "-c", command)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("[Docker Cleanup] Local exec failed: %v: %s", err, string(output))
+		}
 	}
 }

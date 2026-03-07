@@ -97,20 +97,15 @@ export const ProfileForm = () => {
 
 	useEffect(() => {
 		if (data) {
-			form.reset(
-				{
-					email: data?.user?.email || "",
-					password: form.getValues("password") || "",
-					image: data?.user?.image || "",
-					currentPassword: form.getValues("currentPassword") || "",
-					allowImpersonation: data?.user?.allowImpersonation,
-					firstName: data?.user?.firstName || "",
-					lastName: data?.user?.lastName || "",
-				},
-				{
-					keepValues: true,
-				},
-			);
+			form.reset({
+				email: data?.user?.email || "",
+				password: form.getValues("password") || "",
+				image: data?.user?.image || "",
+				currentPassword: form.getValues("currentPassword") || "",
+				allowImpersonation: data?.user?.allowImpersonation,
+				firstName: data?.user?.firstName || "",
+				lastName: data?.user?.lastName || "",
+			});
 			form.setValue("allowImpersonation", data?.user?.allowImpersonation);
 
 			if (data.user.email) {

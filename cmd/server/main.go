@@ -151,6 +151,7 @@ func main() {
 
 	// Register REST API routes
 	h := handler.New(database, a,
+		handler.WithConfig(cfg),
 		handler.WithQueue(q),
 		handler.WithDocker(dockerClient),
 		handler.WithTraefik(traefikMgr),

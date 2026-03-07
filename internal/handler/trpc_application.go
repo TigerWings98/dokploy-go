@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -67,9 +70,36 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 	r["application.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ApplicationID string `json:"applicationId"` }
 		json.Unmarshal(input, &in)
-		result := h.DB.Delete(&schema.Application{}, "\"applicationId\" = ?", in.ApplicationID)
-		if result.Error != nil {
-			return nil, result.Error
+
+		var app schema.Application
+		if err := h.DB.Preload("Server").Preload("Server.SSHKey").
+			First(&app, "\"applicationId\" = ?", in.ApplicationID).Error; err != nil {
+			return nil, &trpcErr{"Application not found", "NOT_FOUND", 404}
+		}
+
+		// 1. Remove Docker service
+		if h.Docker != nil {
+			h.Docker.RemoveService(context.Background(), app.AppName)
+		}
+
+		// 2. Remove Traefik config
+		if h.Traefik != nil {
+			h.Traefik.RemoveApplicationConfig(app.AppName)
+		}
+
+		// 3. Remove source code directory
+		if h.Config != nil {
+			codeDir := filepath.Join(h.Config.Paths.ApplicationsPath, app.AppName)
+			os.RemoveAll(codeDir)
+
+			// 4. Remove log files
+			logDir := filepath.Join(h.Config.Paths.LogsPath, app.AppName)
+			os.RemoveAll(logDir)
+		}
+
+		// 5. Delete from database (cascades to deployments, domains, etc.)
+		if err := h.DB.Delete(&schema.Application{}, "\"applicationId\" = ?", in.ApplicationID).Error; err != nil {
+			return nil, err
 		}
 		return true, nil
 	}
@@ -121,14 +151,24 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	r["application.start"] = r["application.deploy"]
+	r["application.start"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct{ ApplicationID string `json:"applicationId"` }
+		json.Unmarshal(input, &in)
+		if h.Queue != nil {
+			_, err := h.Queue.EnqueueStartApplication(in.ApplicationID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return true, nil
+	}
 
 	r["application.reload"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ApplicationID string `json:"applicationId"` }
 		json.Unmarshal(input, &in)
+		// Reload redeploys the application (same as deploy with no title/description)
 		if h.Queue != nil {
-			title := "Reload"
-			_, err := h.Queue.EnqueueDeployApplication(in.ApplicationID, &title, nil)
+			_, err := h.Queue.EnqueueDeployApplication(in.ApplicationID, nil, nil)
 			if err != nil {
 				return nil, err
 			}

@@ -8,8 +8,8 @@ import (
 )
 
 func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
-	// gitProvider.all
-	r["gitProvider.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	// gitProvider.getAll (matches TS frontend tRPC call)
+	r["gitProvider.getAll"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := h.getDefaultMember(c)
 		if err != nil {
 			return nil, err
@@ -47,6 +47,34 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 	}
 
 	// GitHub
+	r["github.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			GithubID string `json:"githubId"`
+		}
+		json.Unmarshal(input, &in)
+		var gh schema.Github
+		if err := h.DB.Preload("GitProvider").First(&gh, "\"githubId\" = ?", in.GithubID).Error; err != nil {
+			return nil, &trpcErr{"GitHub provider not found", "NOT_FOUND", 404}
+		}
+		return gh, nil
+	}
+
+	r["github.githubProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var githubs []schema.Github
+		h.DB.Preload("GitProvider").
+			Joins("JOIN \"git_provider\" ON \"git_provider\".\"gitProviderId\" = \"github\".\"gitProviderId\"").
+			Where("\"git_provider\".\"organizationId\" = ?", member.OrganizationID).
+			Find(&githubs)
+		if githubs == nil {
+			githubs = []schema.Github{}
+		}
+		return githubs, nil
+	}
+
 	r["github.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			GithubID string `json:"githubId"`
@@ -125,6 +153,34 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	r["gitlab.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			GitlabID string `json:"gitlabId"`
+		}
+		json.Unmarshal(input, &in)
+		var gl schema.Gitlab
+		if err := h.DB.Preload("GitProvider").First(&gl, "\"gitlabId\" = ?", in.GitlabID).Error; err != nil {
+			return nil, &trpcErr{"GitLab provider not found", "NOT_FOUND", 404}
+		}
+		return gl, nil
+	}
+
+	r["gitlab.gitlabProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var gitlabs []schema.Gitlab
+		h.DB.Preload("GitProvider").
+			Joins("JOIN \"git_provider\" ON \"git_provider\".\"gitProviderId\" = \"gitlab\".\"gitProviderId\"").
+			Where("\"git_provider\".\"organizationId\" = ?", member.OrganizationID).
+			Find(&gitlabs)
+		if gitlabs == nil {
+			gitlabs = []schema.Gitlab{}
+		}
+		return gitlabs, nil
+	}
+
 	r["gitlab.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			GitlabID string `json:"gitlabId"`
@@ -189,6 +245,34 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	r["bitbucket.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			BitbucketID string `json:"bitbucketId"`
+		}
+		json.Unmarshal(input, &in)
+		var bb schema.Bitbucket
+		if err := h.DB.Preload("GitProvider").First(&bb, "\"bitbucketId\" = ?", in.BitbucketID).Error; err != nil {
+			return nil, &trpcErr{"Bitbucket provider not found", "NOT_FOUND", 404}
+		}
+		return bb, nil
+	}
+
+	r["bitbucket.bitbucketProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var bitbuckets []schema.Bitbucket
+		h.DB.Preload("GitProvider").
+			Joins("JOIN \"git_provider\" ON \"git_provider\".\"gitProviderId\" = \"bitbucket\".\"gitProviderId\"").
+			Where("\"git_provider\".\"organizationId\" = ?", member.OrganizationID).
+			Find(&bitbuckets)
+		if bitbuckets == nil {
+			bitbuckets = []schema.Bitbucket{}
+		}
+		return bitbuckets, nil
+	}
+
 	r["bitbucket.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return true, nil
 	}
@@ -240,6 +324,34 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	r["gitea.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			GiteaID string `json:"giteaId"`
+		}
+		json.Unmarshal(input, &in)
+		var gt schema.Gitea
+		if err := h.DB.Preload("GitProvider").First(&gt, "\"giteaId\" = ?", in.GiteaID).Error; err != nil {
+			return nil, &trpcErr{"Gitea provider not found", "NOT_FOUND", 404}
+		}
+		return gt, nil
+	}
+
+	r["gitea.giteaProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var giteas []schema.Gitea
+		h.DB.Preload("GitProvider").
+			Joins("JOIN \"git_provider\" ON \"git_provider\".\"gitProviderId\" = \"gitea\".\"gitProviderId\"").
+			Where("\"git_provider\".\"organizationId\" = ?", member.OrganizationID).
+			Find(&giteas)
+		if giteas == nil {
+			giteas = []schema.Gitea{}
+		}
+		return giteas, nil
+	}
+
 	r["gitea.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return true, nil
 	}
@@ -265,8 +377,74 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 	}
 
 	// Preview Deployment
+	r["previewDeployment.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ApplicationID string `json:"applicationId"`
+		}
+		json.Unmarshal(input, &in)
+		var previews []schema.PreviewDeployment
+		h.DB.Preload("Deployments").Preload("Domains").
+			Where("\"applicationId\" = ?", in.ApplicationID).
+			Order("\"createdAt\" DESC").
+			Find(&previews)
+		if previews == nil {
+			previews = []schema.PreviewDeployment{}
+		}
+		return previews, nil
+	}
+
+	r["previewDeployment.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			PreviewDeploymentID string `json:"previewDeploymentId"`
+		}
+		json.Unmarshal(input, &in)
+		var preview schema.PreviewDeployment
+		if err := h.DB.Preload("Application").Preload("Deployments").Preload("Domains").
+			First(&preview, "\"previewDeploymentId\" = ?", in.PreviewDeploymentID).Error; err != nil {
+			return nil, &trpcErr{"Preview deployment not found", "NOT_FOUND", 404}
+		}
+		return preview, nil
+	}
+
+	r["previewDeployment.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			PreviewDeploymentID string `json:"previewDeploymentId"`
+		}
+		json.Unmarshal(input, &in)
+		if h.PreviewSvc != nil {
+			if err := h.PreviewSvc.RemovePreviewDeployment(in.PreviewDeploymentID); err != nil {
+				return nil, err
+			}
+		} else {
+			h.DB.Delete(&schema.PreviewDeployment{}, "\"previewDeploymentId\" = ?", in.PreviewDeploymentID)
+		}
+		return true, nil
+	}
+
 	r["previewDeployment.redeploy"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		// TODO: Implement redeploy when PreviewService supports it
+		var in struct {
+			PreviewDeploymentID string  `json:"previewDeploymentId"`
+			Title               *string `json:"title"`
+			Description         *string `json:"description"`
+		}
+		json.Unmarshal(input, &in)
+
+		var preview schema.PreviewDeployment
+		if err := h.DB.First(&preview, "\"previewDeploymentId\" = ?", in.PreviewDeploymentID).Error; err != nil {
+			return nil, &trpcErr{"Preview deployment not found", "NOT_FOUND", 404}
+		}
+
+		// Queue a deploy for the preview's application
+		if h.Queue != nil {
+			title := "Rebuild Preview Deployment"
+			if in.Title != nil {
+				title = *in.Title
+			}
+			_, err := h.Queue.EnqueueDeployApplication(preview.ApplicationID, &title, in.Description)
+			if err != nil {
+				return nil, err
+			}
+		}
 		return true, nil
 	}
 }

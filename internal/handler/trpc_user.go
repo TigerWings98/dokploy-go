@@ -36,11 +36,16 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 	}
 
 	r["user.haveRootAccess"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		user := mw.GetUser(c)
-		if user == nil {
-			return false, nil
+		// In self-hosted mode, all authenticated users have root access.
+		// IS_CLOUD mode would restrict this to admin users only.
+		if h.Config != nil && h.Config.IsCloud {
+			user := mw.GetUser(c)
+			if user == nil {
+				return false, nil
+			}
+			return user.Role == "admin", nil
 		}
-		return user.Role == "admin", nil
+		return true, nil
 	}
 
 	r["user.get"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -132,10 +137,28 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 	}
 
 	r["user.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		// Only admin/owner can remove users
+		if member.Role != "admin" && member.Role != "owner" {
+			return nil, &trpcErr{"Only admins can remove users", "UNAUTHORIZED", 403}
+		}
+
 		var in struct {
 			UserID string `json:"userId"`
 		}
 		json.Unmarshal(input, &in)
+
+		// Cannot delete yourself
+		if in.UserID == member.UserID {
+			return nil, &trpcErr{"Cannot delete yourself", "BAD_REQUEST", 400}
+		}
+
+		// Delete member records first, then user
+		h.DB.Where("user_id = ? AND organization_id = ?", in.UserID, member.OrganizationID).
+			Delete(&schema.Member{})
 		h.DB.Delete(&schema.User{}, "id = ?", in.UserID)
 		return true, nil
 	}
@@ -210,15 +233,81 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 	}
 
 	r["user.assignPermissions"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		// Only admin/owner can assign permissions
+		if member.Role != "admin" && member.Role != "owner" {
+			return nil, &trpcErr{"Only admins can assign permissions", "UNAUTHORIZED", 403}
+		}
+
 		var in struct {
-			MemberID    string                 `json:"memberId"`
-			Permissions map[string]interface{} `json:"permissions"`
+			MemberID              string      `json:"memberId"`
+			CanCreateProjects     *bool       `json:"canCreateProjects"`
+			CanCreateServices     *bool       `json:"canCreateServices"`
+			CanDeleteProjects     *bool       `json:"canDeleteProjects"`
+			CanDeleteServices     *bool       `json:"canDeleteServices"`
+			CanAccessToDocker     *bool       `json:"canAccessToDocker"`
+			CanAccessToAPI        *bool       `json:"canAccessToAPI"`
+			CanAccessToSSHKeys    *bool       `json:"canAccessToSSHKeys"`
+			CanAccessToGitProviders *bool     `json:"canAccessToGitProviders"`
+			CanAccessToTraefikFiles *bool     `json:"canAccessToTraefikFiles"`
+			CanDeleteEnvironments *bool       `json:"canDeleteEnvironments"`
+			CanCreateEnvironments *bool       `json:"canCreateEnvironments"`
+			AccessedProjects      *[]string   `json:"accesedProjects"`
+			AccessedServices      *[]string   `json:"accesedServices"`
+			AccessedEnvironments  *[]string   `json:"accessedEnvironments"`
 		}
 		json.Unmarshal(input, &in)
 
-		permJSON, _ := json.Marshal(in.Permissions)
-		permStr := string(permJSON)
-		h.DB.Model(&schema.Member{}).Where("id = ?", in.MemberID).Update("permissions", permStr)
+		updates := map[string]interface{}{}
+		if in.CanCreateProjects != nil {
+			updates["\"canCreateProjects\""] = *in.CanCreateProjects
+		}
+		if in.CanCreateServices != nil {
+			updates["\"canCreateServices\""] = *in.CanCreateServices
+		}
+		if in.CanDeleteProjects != nil {
+			updates["\"canDeleteProjects\""] = *in.CanDeleteProjects
+		}
+		if in.CanDeleteServices != nil {
+			updates["\"canDeleteServices\""] = *in.CanDeleteServices
+		}
+		if in.CanAccessToDocker != nil {
+			updates["\"canAccessToDocker\""] = *in.CanAccessToDocker
+		}
+		if in.CanAccessToAPI != nil {
+			updates["\"canAccessToAPI\""] = *in.CanAccessToAPI
+		}
+		if in.CanAccessToSSHKeys != nil {
+			updates["\"canAccessToSSHKeys\""] = *in.CanAccessToSSHKeys
+		}
+		if in.CanAccessToGitProviders != nil {
+			updates["\"canAccessToGitProviders\""] = *in.CanAccessToGitProviders
+		}
+		if in.CanAccessToTraefikFiles != nil {
+			updates["\"canAccessToTraefikFiles\""] = *in.CanAccessToTraefikFiles
+		}
+		if in.CanDeleteEnvironments != nil {
+			updates["\"canDeleteEnvironments\""] = *in.CanDeleteEnvironments
+		}
+		if in.CanCreateEnvironments != nil {
+			updates["\"canCreateEnvironments\""] = *in.CanCreateEnvironments
+		}
+		if in.AccessedProjects != nil {
+			updates["\"accesedProjects\""] = schema.StringArray(*in.AccessedProjects)
+		}
+		if in.AccessedServices != nil {
+			updates["\"accesedServices\""] = schema.StringArray(*in.AccessedServices)
+		}
+		if in.AccessedEnvironments != nil {
+			updates["\"accessedEnvironments\""] = schema.StringArray(*in.AccessedEnvironments)
+		}
+
+		if len(updates) > 0 {
+			h.DB.Model(&schema.Member{}).Where("id = ?", in.MemberID).Updates(updates)
+		}
 		return true, nil
 	}
 
@@ -227,11 +316,31 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		if err != nil {
 			return nil, err
 		}
+		// Only admin/owner can send invitations
+		if member.Role != "admin" && member.Role != "owner" {
+			return nil, &trpcErr{"Only admins can send invitations", "UNAUTHORIZED", 403}
+		}
+
 		var in struct {
 			Email string `json:"email"`
 			Role  string `json:"role"`
 		}
 		json.Unmarshal(input, &in)
+
+		// Check if user already in this org
+		var existingMember schema.Member
+		if err := h.DB.Joins("JOIN \"user\" ON \"user\".id = member.user_id").
+			Where("\"user\".email = ? AND member.organization_id = ?", in.Email, member.OrganizationID).
+			First(&existingMember).Error; err == nil {
+			return nil, &trpcErr{"User already in organization", "BAD_REQUEST", 400}
+		}
+
+		// Check for existing pending invitation
+		var existing schema.Invitation
+		if err := h.DB.Where("email = ? AND organization_id = ? AND status = ?",
+			in.Email, member.OrganizationID, "pending").First(&existing).Error; err == nil {
+			return nil, &trpcErr{"Invitation already pending", "BAD_REQUEST", 400}
+		}
 
 		role := in.Role
 		inv := schema.Invitation{
@@ -239,11 +348,15 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 			Email:          in.Email,
 			Role:           &role,
 			Status:         "pending",
+			ExpiresAt:      time.Now().Add(48 * time.Hour),
 			InviterID:      member.UserID,
 		}
 		if err := h.DB.Create(&inv).Error; err != nil {
 			return nil, err
 		}
+
+		// TODO: Send invitation email when email service is available
+
 		return inv, nil
 	}
 

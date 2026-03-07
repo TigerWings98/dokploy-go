@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/dokploy/dokploy/internal/auth"
 	"github.com/dokploy/dokploy/internal/backup"
+	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/docker"
 	mw "github.com/dokploy/dokploy/internal/middleware"
@@ -18,6 +19,7 @@ import (
 type Handler struct {
 	DB        *db.DB
 	Auth      *auth.Auth
+	Config    *config.Config
 	Queue     *queue.Queue
 	Docker    *docker.Client
 	Traefik   *traefik.Manager
@@ -68,6 +70,11 @@ func WithScheduler(s *scheduler.Scheduler) HandlerOption {
 // WithBackupService sets the backup service.
 func WithBackupService(b *backup.Service) HandlerOption {
 	return func(h *Handler) { h.BackupSvc = b }
+}
+
+// WithConfig sets the application configuration.
+func WithConfig(c *config.Config) HandlerOption {
+	return func(h *Handler) { h.Config = c }
 }
 
 // WithCertsPath sets the certificates directory path.

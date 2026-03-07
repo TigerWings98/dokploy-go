@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -83,9 +86,45 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	r["compose.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ComposeID string `json:"composeId"` }
 		json.Unmarshal(input, &in)
-		result := h.DB.Delete(&schema.Compose{}, "\"composeId\" = ?", in.ComposeID)
-		if result.Error != nil {
-			return nil, result.Error
+
+		var comp schema.Compose
+		if err := h.DB.Preload("Server").Preload("Server.SSHKey").
+			First(&comp, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}
+		}
+
+		// 1. Stop and remove compose containers
+		composeDir := ""
+		if h.Config != nil {
+			composeDir = filepath.Join(h.Config.Paths.ComposePath, comp.AppName)
+		}
+		stopCmd := fmt.Sprintf("docker compose -p %s down", comp.AppName)
+		if comp.ServerID != nil && comp.Server != nil && comp.Server.SSHKey != nil {
+			conn := process.SSHConnection{
+				Host:       comp.Server.IPAddress,
+				Port:       comp.Server.Port,
+				Username:   comp.Server.Username,
+				PrivateKey: comp.Server.SSHKey.PrivateKey,
+			}
+			process.ExecAsyncRemote(conn, stopCmd, nil)
+		} else if composeDir != "" {
+			process.ExecAsyncStream(stopCmd, nil, process.WithDir(composeDir))
+		}
+
+		// 2. Remove Traefik config
+		if h.Traefik != nil {
+			h.Traefik.RemoveApplicationConfig(comp.AppName)
+		}
+
+		// 3. Remove source code and log directories
+		if h.Config != nil {
+			os.RemoveAll(filepath.Join(h.Config.Paths.ComposePath, comp.AppName))
+			os.RemoveAll(filepath.Join(h.Config.Paths.LogsPath, comp.AppName))
+		}
+
+		// 4. Delete from database
+		if err := h.DB.Delete(&schema.Compose{}, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, err
 		}
 		return true, nil
 	}

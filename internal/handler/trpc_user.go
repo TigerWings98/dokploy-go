@@ -128,11 +128,12 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		updates := map[string]interface{}{}
 		for k, col := range allowed {
 			if v, ok := in[k]; ok {
-				updates[fmt.Sprintf("\"%s\"", col)] = v
+				updates[col] = v
 			}
 		}
 		if len(updates) > 0 {
-			h.DB.Model(&schema.User{}).Where("id = ?", user.ID).Updates(updates)
+			// Use Table() to bypass GORM's NamingStrategy (camelCase column names)
+			h.DB.Table("\"user\"").Where("id = ?", user.ID).Updates(updates)
 		}
 		return true, nil
 	}

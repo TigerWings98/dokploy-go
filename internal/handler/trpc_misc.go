@@ -403,7 +403,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 	}
 
 	// ===== CERTIFICATE =====
-	r["certificate.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificates.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := h.getDefaultMember(c)
 		if err != nil {
 			return nil, err
@@ -416,7 +416,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return certs, nil
 	}
 
-	r["certificate.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificates.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			CertificateID string `json:"certificateId"`
 		}
@@ -428,7 +428,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return cert, nil
 	}
 
-	r["certificate.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificates.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := h.getDefaultMember(c)
 		if err != nil {
 			return nil, err
@@ -442,7 +442,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return cert, nil
 	}
 
-	r["certificate.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificates.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			CertificateID string `json:"certificateId"`
 		}
@@ -509,7 +509,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	r["registry.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	testRegistryByID := func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			RegistryID string `json:"registryId"`
 		}
@@ -525,4 +525,6 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		}
 		return true, nil
 	}
+	r["registry.testConnection"] = testRegistryByID
+	r["registry.testRegistryById"] = testRegistryByID
 }

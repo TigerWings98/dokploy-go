@@ -26,6 +26,10 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		if err := h.DB.Create(&b).Error; err != nil {
 			return nil, err
 		}
+		// Schedule backup cron job if enabled
+		if h.BackupSvc != nil && b.Enabled != nil && *b.Enabled {
+			h.BackupSvc.ScheduleBackup(b)
+		}
 		return b, nil
 	}
 
@@ -34,6 +38,10 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 			BackupID string `json:"backupId"`
 		}
 		json.Unmarshal(input, &in)
+		// Remove cron job if backup service is available
+		if h.BackupSvc != nil {
+			h.BackupSvc.RemoveBackup(in.BackupID)
+		}
 		h.DB.Delete(&schema.Backup{}, "\"backupId\" = ?", in.BackupID)
 		return true, nil
 	}
@@ -48,23 +56,40 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 	}
 
 	r["backup.listBackupFiles"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
-	}
-
-	// Manual backup endpoints
-	manualBackup := func(dbType string) ProcedureFunc {
-		return func(c echo.Context, input json.RawMessage) (interface{}, error) {
-			// TODO: Trigger backup via backup service when implemented
-			return true, nil
+		var in struct {
+			BackupID string `json:"backupId"`
 		}
+		json.Unmarshal(input, &in)
+		if h.BackupSvc != nil {
+			files, err := h.BackupSvc.ListBackupFiles(in.BackupID)
+			if err != nil {
+				return []string{}, nil
+			}
+			return files, nil
+		}
+		return []string{}, nil
 	}
 
-	r["backup.manualBackupPostgres"] = manualBackup("postgres")
-	r["backup.manualBackupMySql"] = manualBackup("mysql")
-	r["backup.manualBackupMariadb"] = manualBackup("mariadb")
-	r["backup.manualBackupMongo"] = manualBackup("mongo")
-	r["backup.manualBackupCompose"] = manualBackup("compose")
-	r["backup.manualBackupWebServer"] = manualBackup("webserver")
+	// Manual backup endpoints - all use the same RunBackup logic
+	manualBackup := func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			BackupID string `json:"backupId"`
+		}
+		json.Unmarshal(input, &in)
+		if h.BackupSvc != nil {
+			if err := h.BackupSvc.RunBackup(in.BackupID); err != nil {
+				return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+			}
+		}
+		return true, nil
+	}
+
+	r["backup.manualBackupPostgres"] = manualBackup
+	r["backup.manualBackupMySql"] = manualBackup
+	r["backup.manualBackupMariadb"] = manualBackup
+	r["backup.manualBackupMongo"] = manualBackup
+	r["backup.manualBackupCompose"] = manualBackup
+	r["backup.manualBackupWebServer"] = manualBackup
 
 	// Volume Backups
 	r["volumeBackups.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

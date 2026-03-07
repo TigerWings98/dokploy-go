@@ -25,8 +25,8 @@ type PreviewDeployment struct {
 
 	// Relations
 	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:PreviewDeploymentID" json:"deployments,omitempty"`
-	Domains     []Domain     `gorm:"foreignKey:PreviewDeploymentID" json:"domains,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:PreviewDeploymentID" json:"deployments"`
+	Domains     []Domain     `gorm:"foreignKey:PreviewDeploymentID" json:"domains"`
 }
 
 func (PreviewDeployment) TableName() string { return "preview_deployments" }
@@ -89,7 +89,7 @@ type Schedule struct {
 	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
 	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:ScheduleID" json:"deployments,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:ScheduleID" json:"deployments"`
 }
 
 func (Schedule) TableName() string { return "schedule" }

@@ -133,18 +133,18 @@ type Application struct {
 
 	// Relations
 	Environment        *Environment        `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Deployments        []Deployment        `gorm:"foreignKey:ApplicationID" json:"deployments,omitempty"`
-	Domains            []Domain            `gorm:"foreignKey:ApplicationID" json:"domains,omitempty"`
-	Mounts             []Mount             `gorm:"foreignKey:ApplicationID" json:"mounts,omitempty"`
-	Redirects          []Redirect          `gorm:"foreignKey:ApplicationID" json:"redirects,omitempty"`
-	Security           []Security          `gorm:"foreignKey:ApplicationID" json:"security,omitempty"`
-	Ports              []Port              `gorm:"foreignKey:ApplicationID" json:"ports,omitempty"`
+	Deployments        []Deployment        `gorm:"foreignKey:ApplicationID" json:"deployments"`
+	Domains            []Domain            `gorm:"foreignKey:ApplicationID" json:"domains"`
+	Mounts             []Mount             `gorm:"foreignKey:ApplicationID" json:"mounts"`
+	Redirects          []Redirect          `gorm:"foreignKey:ApplicationID" json:"redirects"`
+	Security           []Security          `gorm:"foreignKey:ApplicationID" json:"security"`
+	Ports              []Port              `gorm:"foreignKey:ApplicationID" json:"ports"`
 	Registry           *Registry           `gorm:"foreignKey:RegistryID" json:"registry,omitempty"`
 	BuildRegistry      *Registry           `gorm:"foreignKey:BuildRegistryID" json:"buildRegistry,omitempty"`
 	RollbackRegistry   *Registry           `gorm:"foreignKey:RollbackRegistryID" json:"rollbackRegistry,omitempty"`
 	Server             *Server             `gorm:"foreignKey:ServerID" json:"server,omitempty"`
 	BuildServer        *Server             `gorm:"foreignKey:BuildServerID" json:"buildServer,omitempty"`
-	PreviewDeployments []PreviewDeployment `gorm:"foreignKey:ApplicationID" json:"previewDeployments,omitempty"`
+	PreviewDeployments []PreviewDeployment `gorm:"foreignKey:ApplicationID" json:"previewDeployments"`
 
 	// Git provider relations
 	Github          *Github    `gorm:"foreignKey:GithubID" json:"github,omitempty"`

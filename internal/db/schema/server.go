@@ -30,8 +30,8 @@ type Server struct {
 	// Relations
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
 	SSHKey       *SSHKey       `gorm:"foreignKey:SSHKeyID" json:"sshKey,omitempty"`
-	Applications []Application `gorm:"foreignKey:ServerID" json:"applications,omitempty"`
-	Deployments  []Deployment  `gorm:"foreignKey:ServerID" json:"deployments,omitempty"`
+	Applications []Application `gorm:"foreignKey:ServerID" json:"applications"`
+	Deployments  []Deployment  `gorm:"foreignKey:ServerID" json:"deployments"`
 }
 
 func (Server) TableName() string { return "server" }

@@ -46,11 +46,11 @@ type Compose struct {
 	// Relations
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:ComposeID" json:"deployments,omitempty"`
-	Domains     []Domain     `gorm:"foreignKey:ComposeID" json:"domains,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:ComposeID" json:"mounts,omitempty"`
-	Security    []Security   `gorm:"foreignKey:ComposeID" json:"security,omitempty"`
-	Redirects   []Redirect   `gorm:"foreignKey:ComposeID" json:"redirects,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:ComposeID" json:"deployments"`
+	Domains     []Domain     `gorm:"foreignKey:ComposeID" json:"domains"`
+	Mounts      []Mount      `gorm:"foreignKey:ComposeID" json:"mounts"`
+	Security    []Security   `gorm:"foreignKey:ComposeID" json:"security"`
+	Redirects   []Redirect   `gorm:"foreignKey:ComposeID" json:"redirects"`
 }
 
 func (Compose) TableName() string { return "compose" }

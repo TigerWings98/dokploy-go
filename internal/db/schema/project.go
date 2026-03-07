@@ -18,7 +18,7 @@ type Project struct {
 
 	// Relations
 	Organization *Organization  `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	Environments []Environment  `gorm:"foreignKey:ProjectID;references:ProjectID" json:"environments,omitempty"`
+	Environments []Environment  `gorm:"foreignKey:ProjectID;references:ProjectID" json:"environments"`
 }
 
 func (Project) TableName() string { return "project" }

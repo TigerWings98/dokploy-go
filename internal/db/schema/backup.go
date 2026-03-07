@@ -20,7 +20,7 @@ type Destination struct {
 	OrganizationID string  `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	Backups      []Backup      `gorm:"foreignKey:DestinationID" json:"backups,omitempty"`
+	Backups      []Backup      `gorm:"foreignKey:DestinationID" json:"backups"`
 }
 
 func (Destination) TableName() string { return "destination" }
@@ -54,7 +54,7 @@ type Backup struct {
 	MySQL       *MySQL       `gorm:"foreignKey:MySQLID" json:"mysql,omitempty"`
 	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID" json:"mariadb,omitempty"`
 	Mongo       *Mongo       `gorm:"foreignKey:MongoID" json:"mongo,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:BackupID" json:"deployments,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:BackupID" json:"deployments"`
 }
 
 func (Backup) TableName() string { return "backup" }
@@ -100,7 +100,7 @@ type VolumeBackup struct {
 	Redis       *Redis       `gorm:"foreignKey:RedisID" json:"redis,omitempty"`
 	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
 	Destination *Destination `gorm:"foreignKey:DestinationID" json:"destination,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:VolumeBackupID" json:"deployments,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:VolumeBackupID" json:"deployments"`
 }
 
 func (VolumeBackup) TableName() string { return "volume_backup" }

@@ -49,7 +49,7 @@ type Github struct {
 	GitProviderID   string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
 	GitProvider  *GitProvider  `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
-	Applications []Application `gorm:"foreignKey:GithubID" json:"applications,omitempty"`
+	Applications []Application `gorm:"foreignKey:GithubID" json:"applications"`
 }
 
 func (Github) TableName() string { return "github" }

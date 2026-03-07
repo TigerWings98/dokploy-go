@@ -37,8 +37,8 @@ type User struct {
 
 	// Relations
 	Account       *Account       `gorm:"foreignKey:UserID" json:"account,omitempty"`
-	Organizations []Organization `gorm:"foreignKey:OwnerID" json:"organizations,omitempty"`
-	APIKeys       []APIKey       `gorm:"foreignKey:UserID" json:"apiKeys,omitempty"`
+	Organizations []Organization `gorm:"foreignKey:OwnerID" json:"organizations"`
+	APIKeys       []APIKey       `gorm:"foreignKey:UserID" json:"apiKeys"`
 }
 
 func (User) TableName() string { return "user" }
@@ -117,9 +117,9 @@ type Organization struct {
 
 	// Relations
 	Owner    *User      `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
-	Members  []Member   `gorm:"foreignKey:OrganizationID" json:"members,omitempty"`
-	Projects []Project  `gorm:"foreignKey:OrganizationID" json:"projects,omitempty"`
-	Servers  []Server   `gorm:"foreignKey:OrganizationID" json:"servers,omitempty"`
+	Members  []Member   `gorm:"foreignKey:OrganizationID" json:"members"`
+	Projects []Project  `gorm:"foreignKey:OrganizationID" json:"projects"`
+	Servers  []Server   `gorm:"foreignKey:OrganizationID" json:"servers"`
 }
 
 func (Organization) TableName() string { return "organization" }

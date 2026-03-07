@@ -11,14 +11,25 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// IsRedisAvailable checks if Redis is reachable at the given address.
+// IsRedisAvailable checks if Redis is reachable and responds to PING.
 func IsRedisAvailable(addr string) bool {
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		return false
 	}
-	conn.Close()
-	return true
+	defer conn.Close()
+	// Send Redis PING command and check for +PONG response
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	_, err = conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
+	if err != nil {
+		return false
+	}
+	buf := make([]byte, 32)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return false
+	}
+	return n >= 5 && string(buf[:5]) == "+PONG"
 }
 
 // Task types

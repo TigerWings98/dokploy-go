@@ -64,6 +64,19 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 			}
 			return nil, err
 		}
+		// Load Environment.Project chain (needed by frontend for org context)
+		if app.EnvironmentID != "" {
+			var env schema.Environment
+			if err := h.DB.First(&env, "\"environmentId\" = ?", app.EnvironmentID).Error; err == nil {
+				if env.ProjectID != "" {
+					var proj schema.Project
+					if err := h.DB.First(&proj, "\"projectId\" = ?", env.ProjectID).Error; err == nil {
+						env.Project = &proj
+					}
+				}
+				app.Environment = &env
+			}
+		}
 		return app, nil
 	}
 

@@ -36,16 +36,17 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 	}
 
 	r["user.haveRootAccess"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		// In self-hosted mode, all authenticated users have root access.
-		// IS_CLOUD mode would restrict this to admin users only.
-		if h.Config != nil && h.Config.IsCloud {
-			user := mw.GetUser(c)
-			if user == nil {
-				return false, nil
-			}
-			return user.Role == "admin", nil
+		// haveRootAccess is a cloud-only concept.
+		// In self-hosted mode, returns false (this flag is not used for access control).
+		if h.Config == nil || !h.Config.IsCloud {
+			return false, nil
 		}
-		return true, nil
+		// In cloud mode, check if user is the platform admin
+		user := mw.GetUser(c)
+		if user == nil {
+			return false, nil
+		}
+		return user.Role == "admin", nil
 	}
 
 	r["user.get"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -137,13 +138,18 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 	}
 
 	r["user.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// In cloud mode, user removal is handled differently
+		if h.Config != nil && h.Config.IsCloud {
+			return true, nil
+		}
+
 		member, err := h.getDefaultMember(c)
 		if err != nil {
 			return nil, err
 		}
 		// Only admin/owner can remove users
 		if member.Role != "admin" && member.Role != "owner" {
-			return nil, &trpcErr{"Only admins can remove users", "UNAUTHORIZED", 403}
+			return nil, &trpcErr{"Only owners or admins can delete users", "FORBIDDEN", 403}
 		}
 
 		var in struct {
@@ -151,14 +157,29 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		}
 		json.Unmarshal(input, &in)
 
-		// Cannot delete yourself
-		if in.UserID == member.UserID {
-			return nil, &trpcErr{"Cannot delete yourself", "BAD_REQUEST", 400}
+		// Find the target member in the same org
+		var targetMember schema.Member
+		if err := h.DB.Where("user_id = ? AND organization_id = ?", in.UserID, member.OrganizationID).
+			First(&targetMember).Error; err != nil {
+			return nil, &trpcErr{"Target user is not a member of this organization", "NOT_FOUND", 404}
 		}
 
-		// Delete member records first, then user
-		h.DB.Where("user_id = ? AND organization_id = ?", in.UserID, member.OrganizationID).
-			Delete(&schema.Member{})
+		// Cannot delete the org owner
+		if targetMember.Role == "owner" {
+			return nil, &trpcErr{"You cannot delete the organization owner", "FORBIDDEN", 403}
+		}
+
+		// Admins cannot delete themselves
+		if targetMember.Role == "admin" && in.UserID == member.UserID {
+			return nil, &trpcErr{"Admins cannot delete themselves", "FORBIDDEN", 403}
+		}
+
+		// Admins cannot delete other admins (only owners can)
+		if member.Role == "admin" && targetMember.Role == "admin" {
+			return nil, &trpcErr{"Only the organization owner can delete admins", "FORBIDDEN", 403}
+		}
+
+		// Delete user (cascades to member, account, etc.)
 		h.DB.Delete(&schema.User{}, "id = ?", in.UserID)
 		return true, nil
 	}
@@ -243,7 +264,7 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		}
 
 		var in struct {
-			MemberID              string      `json:"memberId"`
+			ID                    string      `json:"id"` // userId
 			CanCreateProjects     *bool       `json:"canCreateProjects"`
 			CanCreateServices     *bool       `json:"canCreateServices"`
 			CanDeleteProjects     *bool       `json:"canDeleteProjects"`
@@ -306,58 +327,44 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		}
 
 		if len(updates) > 0 {
-			h.DB.Model(&schema.Member{}).Where("id = ?", in.MemberID).Updates(updates)
+			h.DB.Model(&schema.Member{}).
+				Where("user_id = ? AND organization_id = ?", in.ID, member.OrganizationID).
+				Updates(updates)
 		}
 		return true, nil
 	}
 
 	r["user.sendInvitation"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		member, err := h.getDefaultMember(c)
-		if err != nil {
-			return nil, err
-		}
-		// Only admin/owner can send invitations
-		if member.Role != "admin" && member.Role != "owner" {
-			return nil, &trpcErr{"Only admins can send invitations", "UNAUTHORIZED", 403}
+		// In cloud mode, skip (handled by cloud infrastructure)
+		if h.Config != nil && h.Config.IsCloud {
+			return true, nil
 		}
 
 		var in struct {
-			Email string `json:"email"`
-			Role  string `json:"role"`
+			InvitationID   string `json:"invitationId"`
+			NotificationID string `json:"notificationId"`
 		}
 		json.Unmarshal(input, &in)
 
-		// Check if user already in this org
-		var existingMember schema.Member
-		if err := h.DB.Joins("JOIN \"user\" ON \"user\".id = member.user_id").
-			Where("\"user\".email = ? AND member.organization_id = ?", in.Email, member.OrganizationID).
-			First(&existingMember).Error; err == nil {
-			return nil, &trpcErr{"User already in organization", "BAD_REQUEST", 400}
+		// Look up the existing invitation
+		var inv schema.Invitation
+		if err := h.DB.First(&inv, "id = ?", in.InvitationID).Error; err != nil {
+			return nil, &trpcErr{"Invitation not found", "NOT_FOUND", 404}
 		}
 
-		// Check for existing pending invitation
-		var existing schema.Invitation
-		if err := h.DB.Where("email = ? AND organization_id = ? AND status = ?",
-			in.Email, member.OrganizationID, "pending").First(&existing).Error; err == nil {
-			return nil, &trpcErr{"Invitation already pending", "BAD_REQUEST", 400}
+		// Look up the notification provider (for email sending)
+		var notif schema.Notification
+		if err := h.DB.First(&notif, "\"notificationId\" = ?", in.NotificationID).Error; err != nil {
+			return nil, &trpcErr{"Notification provider not found", "NOT_FOUND", 404}
 		}
 
-		role := in.Role
-		inv := schema.Invitation{
-			OrganizationID: member.OrganizationID,
-			Email:          in.Email,
-			Role:           &role,
-			Status:         "pending",
-			ExpiresAt:      time.Now().Add(48 * time.Hour),
-			InviterID:      member.UserID,
-		}
-		if err := h.DB.Create(&inv).Error; err != nil {
-			return nil, err
-		}
+		// Generate invitation link
+		// TODO: Send actual email via notification provider when email service supports it
+		// inviteLink := fmt.Sprintf("/invitation?token=%s", in.InvitationID)
 
-		// TODO: Send invitation email when email service is available
-
-		return inv, nil
+		return map[string]string{
+			"inviteLink": fmt.Sprintf("/invitation?token=%s", in.InvitationID),
+		}, nil
 	}
 
 	r["user.getContainerMetrics"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

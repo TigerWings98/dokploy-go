@@ -126,6 +126,43 @@ func (h *Handler) registerNotificationTRPC(r procedureRegistry) {
 		r["notification.test"+capitalFirst+"Connection"] = testNotification(t)
 	}
 
+	r["notification.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			NotificationID string `json:"notificationId"`
+		}
+		json.Unmarshal(input, &in)
+		h.DB.Table("notification").Where("\"notificationId\" = ?", in.NotificationID).Delete(map[string]interface{}{})
+		return true, nil
+	}
+
+	r["notification.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			NotificationID string `json:"notificationId"`
+		}
+		json.Unmarshal(input, &in)
+		var notif map[string]interface{}
+		if err := h.DB.Table("notification").Where("\"notificationId\" = ?", in.NotificationID).
+			First(&notif).Error; err != nil {
+			return nil, &trpcErr{"Notification not found", "NOT_FOUND", 404}
+		}
+		return notif, nil
+	}
+
+	r["notification.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var notifs []map[string]interface{}
+		h.DB.Table("notification").
+			Where("\"organizationId\" = ?", member.OrganizationID).
+			Find(&notifs)
+		if notifs == nil {
+			notifs = []map[string]interface{}{}
+		}
+		return notifs, nil
+	}
+
 	r["notification.getEmailProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := h.getDefaultMember(c)
 		if err != nil {

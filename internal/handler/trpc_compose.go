@@ -33,6 +33,13 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 			}
 			return nil, err
 		}
+		// Ensure slices are never null in JSON
+		if compose.Deployments == nil { compose.Deployments = []schema.Deployment{} }
+		if compose.Domains == nil { compose.Domains = []schema.Domain{} }
+		if compose.Mounts == nil { compose.Mounts = []schema.Mount{} }
+		if compose.Security == nil { compose.Security = []schema.Security{} }
+		if compose.Redirects == nil { compose.Redirects = []schema.Redirect{} }
+
 		if compose.EnvironmentID != "" {
 			var env schema.Environment
 			if err := h.DB.First(&env, "\"environmentId\" = ?", compose.EnvironmentID).Error; err == nil {

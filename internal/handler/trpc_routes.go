@@ -94,5 +94,24 @@ func (h *Handler) findDatabaseService(model interface{}, idField, id string) err
 			}
 		}
 	}
+
+	// Ensure slices are never null in JSON response
+	switch m := model.(type) {
+	case *schema.Postgres:
+		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
+		if m.Backups == nil { m.Backups = []schema.Backup{} }
+	case *schema.MySQL:
+		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
+		if m.Backups == nil { m.Backups = []schema.Backup{} }
+	case *schema.MariaDB:
+		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
+		if m.Backups == nil { m.Backups = []schema.Backup{} }
+	case *schema.Mongo:
+		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
+		if m.Backups == nil { m.Backups = []schema.Backup{} }
+	case *schema.Redis:
+		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
+	}
+
 	return nil
 }

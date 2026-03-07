@@ -64,6 +64,14 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 			}
 			return nil, err
 		}
+		// Ensure slices are never null in JSON
+		if app.Deployments == nil { app.Deployments = []schema.Deployment{} }
+		if app.Domains == nil { app.Domains = []schema.Domain{} }
+		if app.Mounts == nil { app.Mounts = []schema.Mount{} }
+		if app.Redirects == nil { app.Redirects = []schema.Redirect{} }
+		if app.Security == nil { app.Security = []schema.Security{} }
+		if app.Ports == nil { app.Ports = []schema.Port{} }
+
 		// Load Environment.Project chain (needed by frontend for org context)
 		if app.EnvironmentID != "" {
 			var env schema.Environment

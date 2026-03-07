@@ -132,7 +132,15 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 	}
 
 	r["volumeBackups.runManually"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		// TODO: Implement volume backup execution
+		var in struct {
+			VolumeBackupID string `json:"volumeBackupId"`
+		}
+		json.Unmarshal(input, &in)
+		if h.BackupSvc != nil {
+			if err := h.BackupSvc.RunVolumeBackup(in.VolumeBackupID); err != nil {
+				return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+			}
+		}
 		return true, nil
 	}
 }

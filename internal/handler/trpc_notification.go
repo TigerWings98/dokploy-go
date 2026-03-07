@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 )
@@ -113,7 +114,22 @@ func (h *Handler) registerNotificationTRPC(r procedureRegistry) {
 
 	testNotification := func(notifType string) ProcedureFunc {
 		return func(c echo.Context, input json.RawMessage) (interface{}, error) {
-			// TODO: Implement actual notification testing
+			var in struct {
+				NotificationID string `json:"notificationId"`
+			}
+			json.Unmarshal(input, &in)
+			if in.NotificationID == "" {
+				return nil, &trpcErr{"notificationId is required", "BAD_REQUEST", 400}
+			}
+			var notif schema.Notification
+			if err := h.DB.First(&notif, "\"notificationId\" = ?", in.NotificationID).Error; err != nil {
+				return nil, &trpcErr{"Notification not found", "NOT_FOUND", 404}
+			}
+			if h.Notifier != nil {
+				if err := h.Notifier.SendTest(&notif); err != nil {
+					return nil, &trpcErr{"Test notification failed: " + err.Error(), "BAD_REQUEST", 400}
+				}
+			}
 			return true, nil
 		}
 	}

@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
+	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
 
@@ -298,11 +300,67 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	}
 
 	r["compose.getTags"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []string{}, nil
+		var in struct {
+			ComposeID string `json:"composeId"`
+		}
+		json.Unmarshal(input, &in)
+		var comp schema.Compose
+		if err := h.DB.First(&comp, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return []string{}, nil
+		}
+		if h.Config == nil {
+			return []string{}, nil
+		}
+		codeDir := filepath.Join(h.Config.Paths.ComposePath, comp.AppName, "code")
+		cmd := exec.Command("git", "tag", "--sort=-creatordate")
+		cmd.Dir = codeDir
+		out, err := cmd.Output()
+		if err != nil {
+			return []string{}, nil
+		}
+		var tags []string
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line != "" {
+				tags = append(tags, line)
+			}
+		}
+		if tags == nil {
+			tags = []string{}
+		}
+		return tags, nil
 	}
 
 	r["compose.loadServices"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			ComposeID string `json:"composeId"`
+		}
+		json.Unmarshal(input, &in)
+		var comp schema.Compose
+		if err := h.DB.First(&comp, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}
+		}
+		if comp.ComposeFile == "" {
+			return []interface{}{}, nil
+		}
+		// Parse compose YAML to extract service names
+		var composeData map[string]interface{}
+		if err := yaml.Unmarshal([]byte(comp.ComposeFile), &composeData); err != nil {
+			return []interface{}{}, nil
+		}
+		services, ok := composeData["services"].(map[string]interface{})
+		if !ok {
+			return []interface{}{}, nil
+		}
+		var result []map[string]interface{}
+		for name := range services {
+			result = append(result, map[string]interface{}{
+				"name": name,
+			})
+		}
+		if result == nil {
+			result = []map[string]interface{}{}
+		}
+		return result, nil
 	}
 
 	r["compose.loadMountsByService"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

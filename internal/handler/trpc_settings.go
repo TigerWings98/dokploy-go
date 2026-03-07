@@ -2,12 +2,15 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 )
 
@@ -246,7 +249,47 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 		if path == "" {
 			path = "/"
 		}
-		// TODO: If serverId is set, read directories from remote server via SSH
+
+		if in.ServerID != nil && *in.ServerID != "" {
+			// Read directories from remote server via SSH
+			var srv schema.Server
+			if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", *in.ServerID).Error; err != nil {
+				return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
+			}
+			if srv.SSHKey == nil {
+				return nil, &trpcErr{"Server SSH key not configured", "BAD_REQUEST", 400}
+			}
+			conn := process.SSHConnection{
+				Host:       srv.IPAddress,
+				Port:       srv.Port,
+				Username:   srv.Username,
+				PrivateKey: srv.SSHKey.PrivateKey,
+			}
+			// List files as JSON: name and type
+			cmd := fmt.Sprintf(`ls -1pa %q | head -200`, path)
+			result, err := process.ExecAsyncRemote(conn, cmd, nil)
+			if err != nil {
+				return nil, &trpcErr{"Failed to read remote directory: " + err.Error(), "BAD_REQUEST", 400}
+			}
+			var dirs []map[string]interface{}
+			for _, line := range strings.Split(result.Stdout, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || line == "./" || line == "../" {
+					continue
+				}
+				isDir := strings.HasSuffix(line, "/")
+				name := strings.TrimSuffix(line, "/")
+				dirs = append(dirs, map[string]interface{}{
+					"name":  name,
+					"isDir": isDir,
+				})
+			}
+			if dirs == nil {
+				dirs = []map[string]interface{}{}
+			}
+			return dirs, nil
+		}
+
 		entries, err := os.ReadDir(path)
 		if err != nil {
 			return nil, &trpcErr{"Cannot read directory: " + err.Error(), "BAD_REQUEST", 400}

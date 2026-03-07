@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"net/http"
 
+	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
 )
 
@@ -29,6 +31,19 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 
 	// Auth
 	r["auth.logout"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		token := getSessionToken(c)
+		if token != "" {
+			h.DB.Where("token = ?", token).Delete(&schema.Session{})
+		}
+		cookie := &http.Cookie{
+			Name:     "better-auth.session_token",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		}
+		c.SetCookie(cookie)
 		return true, nil
 	}
 
@@ -58,41 +73,6 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 	}
 	r["swarm.getAppInfos"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return []interface{}{}, nil
-	}
-
-	// Patch stubs
-	r["patch.byEntityId"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
-	}
-	r["patch.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return nil, &trpcErr{"Patch not found", "NOT_FOUND", 404}
-	}
-	r["patch.cleanPatchRepos"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["patch.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["patch.ensureRepo"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["patch.markFileForDeletion"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["patch.readRepoDirectories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
-	}
-	r["patch.readRepoFile"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return "", nil
-	}
-	r["patch.saveFileAsPatch"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["patch.toggleEnabled"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["patch.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
 	}
 
 	// AI stubs
@@ -138,35 +118,6 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 		return map[string]interface{}{"enabled": false}, nil
 	}
 	r["licenseKey.updateEnterpriseSettings"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-
-	// SSO stubs
-	r["sso.listProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
-	}
-	r["sso.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return nil, &trpcErr{"SSO provider not found", "NOT_FOUND", 404}
-	}
-	r["sso.register"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["sso.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["sso.deleteProvider"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["sso.getTrustedOrigins"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
-	}
-	r["sso.addTrustedOrigin"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["sso.removeTrustedOrigin"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
-	}
-	r["sso.updateTrustedOrigin"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return true, nil
 	}
 

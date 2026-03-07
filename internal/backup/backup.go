@@ -222,3 +222,78 @@ func (s *Service) RunBackup(backupID string) error {
 
 	return nil
 }
+
+// RunVolumeBackup executes a volume backup for the given volume backup configuration.
+func (s *Service) RunVolumeBackup(volumeBackupID string) error {
+	var vb schema.VolumeBackup
+	if err := s.db.
+		Preload("Destination").
+		Preload("Application").
+		Preload("Application.Server").
+		Preload("Application.Server.SSHKey").
+		Preload("Compose").
+		Preload("Compose.Server").
+		Preload("Compose.Server.SSHKey").
+		First(&vb, "\"volumeBackupId\" = ?", volumeBackupID).Error; err != nil {
+		return fmt.Errorf("volume backup not found: %w", err)
+	}
+
+	if vb.Destination == nil {
+		return fmt.Errorf("volume backup destination not configured")
+	}
+
+	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05")
+	filename := fmt.Sprintf("%s-%s.tar", vb.AppName, timestamp)
+	backupDir := filepath.Join("/tmp/dokploy-volume-backups", vb.AppName)
+	os.MkdirAll(backupDir, 0755)
+	backupPath := filepath.Join(backupDir, filename)
+
+	// Backup the Docker volume to a tar file
+	backupCmd := fmt.Sprintf(
+		"docker run --rm -v %s:/volume -v %s:/backup alpine tar cf /backup/%s -C /volume .",
+		vb.VolumeName, backupDir, filename,
+	)
+
+	var server *schema.Server
+	if vb.Application != nil && vb.Application.Server != nil {
+		server = vb.Application.Server
+	} else if vb.Compose != nil && vb.Compose.Server != nil {
+		server = vb.Compose.Server
+	}
+
+	if server != nil && server.SSHKey != nil {
+		conn := process.SSHConnection{
+			Host:       server.IPAddress,
+			Port:       server.Port,
+			Username:   server.Username,
+			PrivateKey: server.SSHKey.PrivateKey,
+		}
+		if _, err := process.ExecAsyncRemote(conn, backupCmd, nil); err != nil {
+			return fmt.Errorf("failed to create volume backup: %w", err)
+		}
+	} else {
+		if _, err := process.ExecAsync(backupCmd); err != nil {
+			return fmt.Errorf("failed to create volume backup: %w", err)
+		}
+	}
+
+	// Upload to S3 using rclone
+	dest := vb.Destination
+	rcloneEnv := fmt.Sprintf(
+		"RCLONE_CONFIG_S3_TYPE=s3 RCLONE_CONFIG_S3_PROVIDER=Other "+
+			"RCLONE_CONFIG_S3_ACCESS_KEY_ID=%s RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=%s "+
+			"RCLONE_CONFIG_S3_REGION=%s RCLONE_CONFIG_S3_ENDPOINT=%s",
+		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
+	)
+
+	uploadCmd := fmt.Sprintf("%s rclone copy %s s3:%s/%s",
+		rcloneEnv, backupPath, dest.Bucket, vb.AppName)
+
+	if _, err := process.ExecAsync(uploadCmd); err != nil {
+		os.Remove(backupPath)
+		return fmt.Errorf("failed to upload volume backup: %w", err)
+	}
+
+	os.Remove(backupPath)
+	return nil
+}

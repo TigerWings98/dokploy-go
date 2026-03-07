@@ -45,6 +45,8 @@ func (h *Handler) buildRegistry() procedureRegistry {
 	h.registerScheduleTRPC(r)
 	h.registerBackupTRPC(r)
 	h.registerMiscTRPC(r)
+	h.registerPatchTRPC(r)
+	h.registerSSOTRPC(r)
 	h.registerStubsTRPC(r)
 
 	return r

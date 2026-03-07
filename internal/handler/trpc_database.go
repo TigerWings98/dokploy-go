@@ -68,12 +68,42 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry) {
 		}
 
 		r[d.routerName+".deploy"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+			var in map[string]interface{}
+			json.Unmarshal(input, &in)
+			id, _ := in[d.idField].(string)
+			if h.Queue != nil {
+				if _, err := h.Queue.EnqueueDeployDatabase(id, d.routerName); err != nil {
+					return nil, err
+				}
+			}
 			return true, nil
 		}
 		r[d.routerName+".start"] = r[d.routerName+".deploy"]
-		r[d.routerName+".stop"] = r[d.routerName+".deploy"]
 		r[d.routerName+".reload"] = r[d.routerName+".deploy"]
-		r[d.routerName+".rebuild"] = r[d.routerName+".deploy"]
+
+		r[d.routerName+".stop"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+			var in map[string]interface{}
+			json.Unmarshal(input, &in)
+			id, _ := in[d.idField].(string)
+			if h.Queue != nil {
+				if _, err := h.Queue.EnqueueStopDatabase(id, d.routerName); err != nil {
+					return nil, err
+				}
+			}
+			return true, nil
+		}
+
+		r[d.routerName+".rebuild"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+			var in map[string]interface{}
+			json.Unmarshal(input, &in)
+			id, _ := in[d.idField].(string)
+			if h.Queue != nil {
+				if _, err := h.Queue.EnqueueRebuildDatabase(id, d.routerName); err != nil {
+					return nil, err
+				}
+			}
+			return true, nil
+		}
 
 		r[d.routerName+".saveEnvironment"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 			var in map[string]interface{}

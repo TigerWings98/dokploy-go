@@ -510,7 +510,19 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 	}
 
 	r["registry.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		// TODO: Test Docker registry login
+		var in struct {
+			RegistryID string `json:"registryId"`
+		}
+		json.Unmarshal(input, &in)
+		var reg schema.Registry
+		if err := h.DB.First(&reg, "\"registryId\" = ?", in.RegistryID).Error; err != nil {
+			return nil, &trpcErr{"Registry not found", "NOT_FOUND", 404}
+		}
+		if h.Docker != nil {
+			if err := h.Docker.TestRegistryLogin(c.Request().Context(), reg.RegistryURL, reg.Username, reg.Password); err != nil {
+				return nil, &trpcErr{"Registry connection failed: " + err.Error(), "BAD_REQUEST", 400}
+			}
+		}
 		return true, nil
 	}
 }

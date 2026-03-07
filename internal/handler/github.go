@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
+	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
@@ -245,13 +247,48 @@ func (h *Handler) fetchGithubBranches(gh *schema.Github, owner, repo string) ([]
 	return allBranches, nil
 }
 
-// generateGithubInstallationToken creates a JWT and exchanges it for an installation access token.
+// generateGithubInstallationToken creates a JWT signed with the GitHub App private key
+// and exchanges it for an installation access token.
 func generateGithubInstallationToken(appID int, installationID string, privateKeyPEM string) (string, error) {
-	// For now, use a simplified approach via the GitHub API
-	// In production, this would create a JWT signed with the app's private key
-	// and exchange it for an installation token via POST /app/installations/{id}/access_tokens
+	key, err := jwtv5.ParseRSAPrivateKeyFromPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse private key: %w", err)
+	}
 
-	// This is a placeholder that would need proper JWT implementation
-	// when the GitHub App integration is fully tested
-	return "", fmt.Errorf("github app token generation requires JWT library - configure via webhook instead")
+	now := time.Now()
+	claims := jwtv5.MapClaims{
+		"iat": jwtv5.NewNumericDate(now.Add(-60 * time.Second)),
+		"exp": jwtv5.NewNumericDate(now.Add(10 * time.Minute)),
+		"iss": appID,
+	}
+	token := jwtv5.NewWithClaims(jwtv5.SigningMethodRS256, claims)
+	jwtToken, err := token.SignedString(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT: %w", err)
+	}
+
+	// Exchange JWT for installation access token
+	url := fmt.Sprintf("https://api.github.com/app/installations/%s/access_tokens", installationID)
+	req, _ := http.NewRequest("POST", url, nil)
+	req.Header.Set("Authorization", "Bearer "+jwtToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to request installation token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("github returned status %d when creating installation token", resp.StatusCode)
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode installation token response: %w", err)
+	}
+
+	return result.Token, nil
 }

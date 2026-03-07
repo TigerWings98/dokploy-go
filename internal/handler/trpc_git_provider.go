@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/provider"
 	"github.com/labstack/echo/v4"
 )
 
@@ -84,7 +86,11 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		if err := h.DB.First(&gh, "\"githubId\" = ?", in.GithubID).Error; err != nil {
 			return nil, &trpcErr{"GitHub provider not found", "NOT_FOUND", 404}
 		}
-		return true, nil
+		repos, err := h.fetchGithubRepos(&gh)
+		if err != nil {
+			return nil, &trpcErr{"Connection failed: " + err.Error(), "BAD_REQUEST", 400}
+		}
+		return fmt.Sprintf("Found %d repositories", len(repos)), nil
 	}
 
 	r["github.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -97,11 +103,43 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 	}
 
 	r["github.getGithubRepositories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			GithubID string `json:"githubId"`
+		}
+		json.Unmarshal(input, &in)
+		var gh schema.Github
+		if err := h.DB.First(&gh, "\"githubId\" = ?", in.GithubID).Error; err != nil {
+			return nil, &trpcErr{"GitHub provider not found", "NOT_FOUND", 404}
+		}
+		repos, err := h.fetchGithubRepos(&gh)
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
+		if repos == nil {
+			repos = []interface{}{}
+		}
+		return repos, nil
 	}
 
 	r["github.getGithubBranches"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			GithubID string `json:"githubId"`
+			Owner    string `json:"owner"`
+			Repo     string `json:"repo"`
+		}
+		json.Unmarshal(input, &in)
+		var gh schema.Github
+		if err := h.DB.First(&gh, "\"githubId\" = ?", in.GithubID).Error; err != nil {
+			return nil, &trpcErr{"GitHub provider not found", "NOT_FOUND", 404}
+		}
+		branches, err := h.fetchGithubBranches(&gh, in.Owner, in.Repo)
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
+		if branches == nil {
+			branches = []interface{}{}
+		}
+		return branches, nil
 	}
 
 	// GitLab
@@ -190,15 +228,73 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		if err := h.DB.First(&gl, "\"gitlabId\" = ?", in.GitlabID).Error; err != nil {
 			return nil, &trpcErr{"GitLab provider not found", "NOT_FOUND", 404}
 		}
-		return true, nil
+		if gl.AccessToken == nil {
+			return nil, &trpcErr{"GitLab access token not configured", "BAD_REQUEST", 400}
+		}
+		client := provider.NewGitlabClient(*gl.AccessToken, gl.GitlabURL)
+		projects, err := client.ListProjects(1, 1)
+		if err != nil {
+			return nil, &trpcErr{"Connection failed: " + err.Error(), "BAD_REQUEST", 400}
+		}
+		return fmt.Sprintf("Connection successful, found %d projects", len(projects)), nil
 	}
 
 	r["gitlab.getGitlabRepositories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			GitlabID string `json:"gitlabId"`
+		}
+		json.Unmarshal(input, &in)
+		var gl schema.Gitlab
+		if err := h.DB.First(&gl, "\"gitlabId\" = ?", in.GitlabID).Error; err != nil {
+			return nil, &trpcErr{"GitLab provider not found", "NOT_FOUND", 404}
+		}
+		if gl.AccessToken == nil {
+			return []interface{}{}, nil
+		}
+		client := provider.NewGitlabClient(*gl.AccessToken, gl.GitlabURL)
+		var allProjects []provider.GitlabProject
+		page := 1
+		for {
+			projects, err := client.ListProjects(page, 100)
+			if err != nil {
+				return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+			}
+			allProjects = append(allProjects, projects...)
+			if len(projects) < 100 {
+				break
+			}
+			page++
+		}
+		if allProjects == nil {
+			return []provider.GitlabProject{}, nil
+		}
+		return allProjects, nil
 	}
 
 	r["gitlab.getGitlabBranches"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			GitlabID  string `json:"gitlabId"`
+			ProjectID int    `json:"projectId"`
+			Owner     string `json:"owner"`
+			Repo      string `json:"repo"`
+		}
+		json.Unmarshal(input, &in)
+		var gl schema.Gitlab
+		if err := h.DB.First(&gl, "\"gitlabId\" = ?", in.GitlabID).Error; err != nil {
+			return nil, &trpcErr{"GitLab provider not found", "NOT_FOUND", 404}
+		}
+		if gl.AccessToken == nil {
+			return []interface{}{}, nil
+		}
+		client := provider.NewGitlabClient(*gl.AccessToken, gl.GitlabURL)
+		branches, err := client.ListBranches(in.ProjectID)
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
+		if branches == nil {
+			return []provider.GitlabBranch{}, nil
+		}
+		return branches, nil
 	}
 
 	// Bitbucket
@@ -274,15 +370,83 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 	}
 
 	r["bitbucket.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		var in struct {
+			BitbucketID string `json:"bitbucketId"`
+		}
+		json.Unmarshal(input, &in)
+		var bb schema.Bitbucket
+		if err := h.DB.First(&bb, "\"bitbucketId\" = ?", in.BitbucketID).Error; err != nil {
+			return nil, &trpcErr{"Bitbucket provider not found", "NOT_FOUND", 404}
+		}
+		if bb.BitbucketUsername == nil || bb.AppPassword == nil {
+			return nil, &trpcErr{"Bitbucket credentials not configured", "BAD_REQUEST", 400}
+		}
+		client := provider.NewBitbucketClient(*bb.BitbucketUsername, *bb.AppPassword)
+		workspace := ""
+		if bb.BitbucketWorkspaceName != nil {
+			workspace = *bb.BitbucketWorkspaceName
+		}
+		repos, err := client.ListRepositories(workspace)
+		if err != nil {
+			return nil, &trpcErr{"Connection failed: " + err.Error(), "BAD_REQUEST", 400}
+		}
+		return fmt.Sprintf("Found %d repositories", len(repos)), nil
 	}
 
 	r["bitbucket.getBitbucketRepositories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			BitbucketID string `json:"bitbucketId"`
+		}
+		json.Unmarshal(input, &in)
+		var bb schema.Bitbucket
+		if err := h.DB.First(&bb, "\"bitbucketId\" = ?", in.BitbucketID).Error; err != nil {
+			return nil, &trpcErr{"Bitbucket provider not found", "NOT_FOUND", 404}
+		}
+		if bb.BitbucketUsername == nil || bb.AppPassword == nil {
+			return []interface{}{}, nil
+		}
+		workspace := ""
+		if bb.BitbucketWorkspaceName != nil {
+			workspace = *bb.BitbucketWorkspaceName
+		}
+		client := provider.NewBitbucketClient(*bb.BitbucketUsername, *bb.AppPassword)
+		repos, err := client.ListRepositories(workspace)
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
+		if repos == nil {
+			return []provider.BitbucketRepository{}, nil
+		}
+		return repos, nil
 	}
 
 	r["bitbucket.getBitbucketBranches"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			BitbucketID string `json:"bitbucketId"`
+			Owner       string `json:"owner"`
+			Repo        string `json:"repo"`
+		}
+		json.Unmarshal(input, &in)
+		var bb schema.Bitbucket
+		if err := h.DB.First(&bb, "\"bitbucketId\" = ?", in.BitbucketID).Error; err != nil {
+			return nil, &trpcErr{"Bitbucket provider not found", "NOT_FOUND", 404}
+		}
+		if bb.BitbucketUsername == nil || bb.AppPassword == nil {
+			return []interface{}{}, nil
+		}
+		workspace := ""
+		if bb.BitbucketWorkspaceName != nil {
+			workspace = *bb.BitbucketWorkspaceName
+		}
+		client := provider.NewBitbucketClient(*bb.BitbucketUsername, *bb.AppPassword)
+		branches, err := client.ListBranches(workspace, in.Repo)
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
+		if branches == nil {
+			return []provider.BitbucketBranch{}, nil
+		}
+		return branches, nil
 	}
 
 	// Gitea
@@ -353,15 +517,80 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 	}
 
 	r["gitea.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		var in struct {
+			GiteaID string `json:"giteaId"`
+		}
+		json.Unmarshal(input, &in)
+		var gt schema.Gitea
+		if err := h.DB.First(&gt, "\"giteaId\" = ?", in.GiteaID).Error; err != nil {
+			return nil, &trpcErr{"Gitea provider not found", "NOT_FOUND", 404}
+		}
+		if gt.AccessToken == nil {
+			return nil, &trpcErr{"Gitea access token not configured", "BAD_REQUEST", 400}
+		}
+		client := provider.NewGiteaClient(*gt.AccessToken, gt.GiteaURL)
+		repos, err := client.ListRepositories(1, 1)
+		if err != nil {
+			return nil, &trpcErr{"Connection failed: " + err.Error(), "BAD_REQUEST", 400}
+		}
+		return fmt.Sprintf("Found %d repositories", len(repos)), nil
 	}
 
 	r["gitea.getGiteaRepositories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			GiteaID string `json:"giteaId"`
+		}
+		json.Unmarshal(input, &in)
+		var gt schema.Gitea
+		if err := h.DB.First(&gt, "\"giteaId\" = ?", in.GiteaID).Error; err != nil {
+			return nil, &trpcErr{"Gitea provider not found", "NOT_FOUND", 404}
+		}
+		if gt.AccessToken == nil {
+			return []interface{}{}, nil
+		}
+		client := provider.NewGiteaClient(*gt.AccessToken, gt.GiteaURL)
+		var allRepos []provider.GiteaRepository
+		page := 1
+		for {
+			repos, err := client.ListRepositories(page, 50)
+			if err != nil {
+				return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+			}
+			allRepos = append(allRepos, repos...)
+			if len(repos) < 50 {
+				break
+			}
+			page++
+		}
+		if allRepos == nil {
+			return []provider.GiteaRepository{}, nil
+		}
+		return allRepos, nil
 	}
 
 	r["gitea.getGiteaBranches"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			GiteaID string `json:"giteaId"`
+			Owner   string `json:"owner"`
+			Repo    string `json:"repo"`
+		}
+		json.Unmarshal(input, &in)
+		var gt schema.Gitea
+		if err := h.DB.First(&gt, "\"giteaId\" = ?", in.GiteaID).Error; err != nil {
+			return nil, &trpcErr{"Gitea provider not found", "NOT_FOUND", 404}
+		}
+		if gt.AccessToken == nil {
+			return []interface{}{}, nil
+		}
+		client := provider.NewGiteaClient(*gt.AccessToken, gt.GiteaURL)
+		branches, err := client.ListBranches(in.Owner, in.Repo)
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
+		if branches == nil {
+			return []provider.GiteaBranch{}, nil
+		}
+		return branches, nil
 	}
 
 	r["gitea.getGiteaUrl"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

@@ -10,6 +10,7 @@ import (
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 )
@@ -235,4 +236,14 @@ func (c *Client) GetContainerByName(ctx context.Context, name string) (*types.Co
 		}
 	}
 	return nil, nil
+}
+
+// TestRegistryLogin tests Docker registry credentials.
+func (c *Client) TestRegistryLogin(ctx context.Context, serverURL, username, password string) error {
+	_, err := c.cli.RegistryLogin(ctx, registrytypes.AuthConfig{
+		ServerAddress: serverURL,
+		Username:      username,
+		Password:      password,
+	})
+	return err
 }

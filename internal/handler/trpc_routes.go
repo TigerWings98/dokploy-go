@@ -1,0 +1,98 @@
+package handler
+
+import (
+	"github.com/dokploy/dokploy/internal/db/schema"
+	mw "github.com/dokploy/dokploy/internal/middleware"
+	"github.com/labstack/echo/v4"
+)
+
+// getDefaultMember returns the default org member for the current user.
+func (h *Handler) getDefaultMember(c echo.Context) (*schema.Member, error) {
+	user := mw.GetUser(c)
+	if user == nil {
+		return nil, &trpcErr{"Authentication required", "UNAUTHORIZED", 401}
+	}
+	session := mw.GetSession(c)
+
+	var member schema.Member
+	q := h.DB.Where("user_id = ?", user.ID)
+	if session != nil && session.ActiveOrganizationID != nil && *session.ActiveOrganizationID != "" {
+		q = q.Where("organization_id = ?", *session.ActiveOrganizationID)
+	}
+	if err := q.Order("is_default DESC, created_at DESC").First(&member).Error; err != nil {
+		return nil, &trpcErr{"No organization membership found", "BAD_REQUEST", 400}
+	}
+	return &member, nil
+}
+
+// buildRegistry creates the full procedure registry by calling each domain's registration.
+func (h *Handler) buildRegistry() procedureRegistry {
+	r := make(procedureRegistry)
+
+	h.registerProjectTRPC(r)
+	h.registerApplicationTRPC(r)
+	h.registerComposeTRPC(r)
+	h.registerDatabaseTRPC(r)
+	h.registerDeploymentTRPC(r)
+	h.registerServerTRPC(r)
+	h.registerOrganizationTRPC(r)
+	h.registerSettingsTRPC(r)
+	h.registerUserTRPC(r)
+	h.registerNotificationTRPC(r)
+	h.registerGitProviderTRPC(r)
+	h.registerSSHKeyTRPC(r)
+	h.registerDockerTRPC(r)
+	h.registerScheduleTRPC(r)
+	h.registerBackupTRPC(r)
+	h.registerMiscTRPC(r)
+	h.registerStubsTRPC(r)
+
+	return r
+}
+
+// findDatabaseService queries a database service by ID with all relations preloaded.
+func (h *Handler) findDatabaseService(model interface{}, idField, id string) error {
+	quotedID := "\"" + idField + "\""
+	query := h.DB.
+		Preload("Environment").
+		Preload("Server").
+		Preload("Mounts")
+
+	switch model.(type) {
+	case *schema.Postgres, *schema.MySQL, *schema.MariaDB, *schema.Mongo:
+		query = query.Preload("Backups").Preload("Backups.Destination")
+	}
+
+	if err := query.Where(quotedID+" = ?", id).First(model).Error; err != nil {
+		return err
+	}
+
+	// Manually load Environment.Project (camelCase PK workaround)
+	type withEnv interface{ GetEnvironmentID() string }
+	if we, ok := model.(withEnv); ok {
+		envID := we.GetEnvironmentID()
+		if envID != "" {
+			var env schema.Environment
+			if err := h.DB.First(&env, "\"environmentId\" = ?", envID).Error; err == nil {
+				if env.ProjectID != "" {
+					var project schema.Project
+					h.DB.First(&project, "\"projectId\" = ?", env.ProjectID)
+					env.Project = &project
+				}
+				switch m := model.(type) {
+				case *schema.Postgres:
+					m.Environment = &env
+				case *schema.MySQL:
+					m.Environment = &env
+				case *schema.MariaDB:
+					m.Environment = &env
+				case *schema.Mongo:
+					m.Environment = &env
+				case *schema.Redis:
+					m.Environment = &env
+				}
+			}
+		}
+	}
+	return nil
+}

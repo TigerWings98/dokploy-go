@@ -1,0 +1,152 @@
+package handler
+
+import (
+	"encoding/json"
+
+	"github.com/dokploy/dokploy/internal/db/schema"
+	mw "github.com/dokploy/dokploy/internal/middleware"
+	"github.com/labstack/echo/v4"
+)
+
+func (h *Handler) registerOrganizationTRPC(r procedureRegistry) {
+	r["organization.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		var orgs []schema.Organization
+		h.DB.Where("id IN (SELECT organization_id FROM member WHERE user_id = ?)", user.ID).
+			Preload("Members", "user_id = ?", user.ID).
+			Find(&orgs)
+		return orgs, nil
+	}
+
+	r["organization.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct{ OrganizationID string `json:"organizationId"` }
+		json.Unmarshal(input, &in)
+		var org schema.Organization
+		if err := h.DB.First(&org, "id = ?", in.OrganizationID).Error; err != nil {
+			return nil, &trpcErr{"Organization not found", "NOT_FOUND", 404}
+		}
+		return org, nil
+	}
+
+	r["organization.active"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, nil
+		}
+		var org schema.Organization
+		if err := h.DB.First(&org, "id = ?", member.OrganizationID).Error; err != nil {
+			return nil, nil
+		}
+		return org, nil
+	}
+
+	r["organization.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		var in struct {
+			Name string  `json:"name"`
+			Logo *string `json:"logo"`
+		}
+		json.Unmarshal(input, &in)
+
+		org := &schema.Organization{Name: in.Name, Logo: in.Logo, OwnerID: user.ID}
+		tx := h.DB.Begin()
+		if err := tx.Create(org).Error; err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		member := &schema.Member{OrganizationID: org.ID, UserID: user.ID, Role: schema.MemberRoleOwner}
+		if err := tx.Create(member).Error; err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		tx.Commit()
+		return org, nil
+	}
+
+	r["organization.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			OrganizationID string  `json:"organizationId"`
+			Name           string  `json:"name"`
+			Logo           *string `json:"logo"`
+		}
+		json.Unmarshal(input, &in)
+		var org schema.Organization
+		if err := h.DB.First(&org, "id = ?", in.OrganizationID).Error; err != nil {
+			return nil, &trpcErr{"Organization not found", "NOT_FOUND", 404}
+		}
+		updates := map[string]interface{}{"name": in.Name}
+		if in.Logo != nil {
+			updates["logo"] = *in.Logo
+		}
+		h.DB.Model(&org).Updates(updates)
+		return org, nil
+	}
+
+	r["organization.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct{ OrganizationID string `json:"organizationId"` }
+		json.Unmarshal(input, &in)
+		h.DB.Delete(&schema.Organization{}, "id = ?", in.OrganizationID)
+		return true, nil
+	}
+
+	r["organization.setDefault"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		var in struct{ OrganizationID string `json:"organizationId"` }
+		json.Unmarshal(input, &in)
+		tx := h.DB.Begin()
+		tx.Model(&schema.Member{}).Where("user_id = ?", user.ID).Update("is_default", false)
+		tx.Model(&schema.Member{}).Where("user_id = ? AND organization_id = ?", user.ID, in.OrganizationID).Update("is_default", true)
+		tx.Commit()
+		return map[string]bool{"success": true}, nil
+	}
+
+	r["organization.allInvitations"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var invitations []schema.Invitation
+		h.DB.Where("organization_id = ?", member.OrganizationID).
+			Order("status DESC, expires_at DESC").
+			Find(&invitations)
+		return invitations, nil
+	}
+
+	r["organization.removeInvitation"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct{ InvitationID string `json:"invitationId"` }
+		json.Unmarshal(input, &in)
+		h.DB.Delete(&schema.Invitation{}, "id = ?", in.InvitationID)
+		return true, nil
+	}
+
+	r["organization.updateMemberRole"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			MemberID string `json:"memberId"`
+			Role     string `json:"role"`
+		}
+		json.Unmarshal(input, &in)
+		h.DB.Model(&schema.Member{}).Where("id = ?", in.MemberID).Update("role", in.Role)
+		return true, nil
+	}
+
+	r["organization.getById"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			OrganizationID string `json:"organizationId"`
+		}
+		json.Unmarshal(input, &in)
+		var org schema.Organization
+		if err := h.DB.First(&org, "id = ?", in.OrganizationID).Error; err != nil {
+			return nil, &trpcErr{"Organization not found", "NOT_FOUND", 404}
+		}
+		return org, nil
+	}
+}

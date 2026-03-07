@@ -238,13 +238,15 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 
 	r["settings.readDirectories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			Path string `json:"path"`
+			Path     string  `json:"path"`
+			ServerID *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
 		path := in.Path
 		if path == "" {
 			path = "/"
 		}
+		// TODO: If serverId is set, read directories from remote server via SSH
 		entries, err := os.ReadDir(path)
 		if err != nil {
 			return nil, &trpcErr{"Cannot read directory: " + err.Error(), "BAD_REQUEST", 400}
@@ -274,11 +276,11 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 
 	r["settings.updateTraefikFile"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
+			Path          string `json:"path"`
+			TraefikConfig string `json:"traefikConfig"`
 		}
 		json.Unmarshal(input, &in)
-		if err := os.WriteFile(in.Path, []byte(in.Content), 0644); err != nil {
+		if err := os.WriteFile(in.Path, []byte(in.TraefikConfig), 0644); err != nil {
 			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
 		}
 		return true, nil
@@ -360,9 +362,9 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.writeTraefikEnv"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		var in struct{ Content string `json:"content"` }
+		var in struct{ Env string `json:"env"` }
 		json.Unmarshal(input, &in)
-		os.WriteFile("/etc/dokploy/traefik/.env", []byte(in.Content), 0644)
+		os.WriteFile("/etc/dokploy/traefik/.env", []byte(in.Env), 0644)
 		return true, nil
 	}
 

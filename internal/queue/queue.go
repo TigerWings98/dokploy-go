@@ -76,6 +76,49 @@ func (q *Queue) Close() error {
 	return q.client.Close()
 }
 
+// QueueJob represents a job in the queue for API responses.
+type QueueJob struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Payload   string `json:"payload"`
+	State     string `json:"state"`
+	Queue     string `json:"queue"`
+	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+// ListQueueJobs returns active and pending tasks across all queues.
+func (q *Queue) ListQueueJobs() []QueueJob {
+	var jobs []QueueJob
+	for _, queueName := range []string{"deployments", "backups", "maintenance"} {
+		for _, state := range []string{"active", "pending"} {
+			var tasks []*asynq.TaskInfo
+			var err error
+			switch state {
+			case "active":
+				tasks, err = q.inspector.ListActiveTasks(queueName)
+			case "pending":
+				tasks, err = q.inspector.ListPendingTasks(queueName)
+			}
+			if err != nil {
+				continue
+			}
+			for _, t := range tasks {
+				jobs = append(jobs, QueueJob{
+					ID:      t.ID,
+					Type:    t.Type,
+					Payload: string(t.Payload),
+					State:   state,
+					Queue:   queueName,
+				})
+			}
+		}
+	}
+	if jobs == nil {
+		jobs = []QueueJob{}
+	}
+	return jobs
+}
+
 // EnqueueDeployApplication enqueues an application deployment.
 func (q *Queue) EnqueueDeployApplication(appID string, title, description *string) (*asynq.TaskInfo, error) {
 	payload, _ := json.Marshal(DeployApplicationPayload{

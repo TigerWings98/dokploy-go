@@ -152,16 +152,12 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 	}
 
 	r["server.publicIp"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		var in struct {
-			ServerID string `json:"serverId"`
+		// Returns the main server's public IP (from settings), not a specific server
+		settings, _ := h.getOrCreateSettings()
+		if settings != nil && settings.ServerIP != nil {
+			return *settings.ServerIP, nil
 		}
-		json.Unmarshal(input, &in)
-
-		var server schema.Server
-		if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
-			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
-		}
-		return server.IPAddress, nil
+		return "", nil
 	}
 
 	r["server.security"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

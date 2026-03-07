@@ -111,5 +111,21 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry) {
 				Update("\"environmentId\"", envID)
 			return true, nil
 		}
+
+		r[d.routerName+".search"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+			var in struct {
+				Query string `json:"query"`
+			}
+			json.Unmarshal(input, &in)
+			var results []map[string]interface{}
+			h.DB.Table(tableName).
+				Where("name ILIKE ?", "%"+in.Query+"%").
+				Order("\"createdAt\" DESC").
+				Find(&results)
+			if results == nil {
+				results = []map[string]interface{}{}
+			}
+			return results, nil
+		}
 	}
 }

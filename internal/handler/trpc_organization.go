@@ -22,8 +22,18 @@ func (h *Handler) registerOrganizationTRPC(r procedureRegistry) {
 	}
 
 	r["organization.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
 		var in struct{ OrganizationID string `json:"organizationId"` }
 		json.Unmarshal(input, &in)
+		// Verify membership
+		var member schema.Member
+		if err := h.DB.Where("user_id = ? AND organization_id = ?", user.ID, in.OrganizationID).
+			First(&member).Error; err != nil {
+			return nil, &trpcErr{"You are not a member of this organization", "FORBIDDEN", 403}
+		}
 		var org schema.Organization
 		if err := h.DB.First(&org, "id = ?", in.OrganizationID).Error; err != nil {
 			return nil, &trpcErr{"Organization not found", "NOT_FOUND", 404}
@@ -70,12 +80,27 @@ func (h *Handler) registerOrganizationTRPC(r procedureRegistry) {
 	}
 
 	r["organization.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
 		var in struct {
 			OrganizationID string  `json:"organizationId"`
 			Name           string  `json:"name"`
 			Logo           *string `json:"logo"`
 		}
 		json.Unmarshal(input, &in)
+
+		// Verify user is a member with owner role
+		var member schema.Member
+		if err := h.DB.Where("user_id = ? AND organization_id = ?", user.ID, in.OrganizationID).
+			First(&member).Error; err != nil {
+			return nil, &trpcErr{"You are not a member of this organization", "FORBIDDEN", 403}
+		}
+		if member.Role != "owner" {
+			return nil, &trpcErr{"Only the organization owner can update it", "FORBIDDEN", 403}
+		}
+
 		var org schema.Organization
 		if err := h.DB.First(&org, "id = ?", in.OrganizationID).Error; err != nil {
 			return nil, &trpcErr{"Organization not found", "NOT_FOUND", 404}
@@ -89,8 +114,30 @@ func (h *Handler) registerOrganizationTRPC(r procedureRegistry) {
 	}
 
 	r["organization.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
 		var in struct{ OrganizationID string `json:"organizationId"` }
 		json.Unmarshal(input, &in)
+
+		// Verify user is the owner
+		var member schema.Member
+		if err := h.DB.Where("user_id = ? AND organization_id = ?", user.ID, in.OrganizationID).
+			First(&member).Error; err != nil {
+			return nil, &trpcErr{"You are not a member of this organization", "FORBIDDEN", 403}
+		}
+		if member.Role != "owner" {
+			return nil, &trpcErr{"Only the organization owner can delete it", "FORBIDDEN", 403}
+		}
+
+		// Must maintain at least 1 owned organization
+		var ownedCount int64
+		h.DB.Model(&schema.Member{}).Where("user_id = ? AND role = ?", user.ID, "owner").Count(&ownedCount)
+		if ownedCount <= 1 {
+			return nil, &trpcErr{"You must have at least one organization", "FORBIDDEN", 403}
+		}
+
 		h.DB.Delete(&schema.Organization{}, "id = ?", in.OrganizationID)
 		return true, nil
 	}
@@ -129,11 +176,48 @@ func (h *Handler) registerOrganizationTRPC(r procedureRegistry) {
 	}
 
 	r["organization.updateMemberRole"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
 		var in struct {
 			MemberID string `json:"memberId"`
 			Role     string `json:"role"`
 		}
 		json.Unmarshal(input, &in)
+
+		// Get the target member
+		var targetMember schema.Member
+		if err := h.DB.First(&targetMember, "id = ?", in.MemberID).Error; err != nil {
+			return nil, &trpcErr{"Member not found", "NOT_FOUND", 404}
+		}
+
+		// Verify caller is admin/owner in the same org
+		var callerMember schema.Member
+		if err := h.DB.Where("user_id = ? AND organization_id = ?", user.ID, targetMember.OrganizationID).
+			First(&callerMember).Error; err != nil {
+			return nil, &trpcErr{"You are not a member of this organization", "FORBIDDEN", 403}
+		}
+
+		if callerMember.Role != "owner" && callerMember.Role != "admin" {
+			return nil, &trpcErr{"Only owners or admins can change roles", "FORBIDDEN", 403}
+		}
+
+		// Cannot change own role
+		if targetMember.UserID == user.ID {
+			return nil, &trpcErr{"Cannot change your own role", "FORBIDDEN", 403}
+		}
+
+		// Cannot change owner role
+		if targetMember.Role == "owner" {
+			return nil, &trpcErr{"Cannot change the owner's role", "FORBIDDEN", 403}
+		}
+
+		// Admin can only change member roles (not other admins)
+		if callerMember.Role == "admin" && targetMember.Role == "admin" {
+			return nil, &trpcErr{"Only the owner can change admin roles", "FORBIDDEN", 403}
+		}
+
 		h.DB.Model(&schema.Member{}).Where("id = ?", in.MemberID).Update("role", in.Role)
 		return true, nil
 	}

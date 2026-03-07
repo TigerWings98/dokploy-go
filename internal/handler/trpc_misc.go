@@ -138,7 +138,46 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	r["mounts.listByServiceId"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServiceID   string `json:"serviceId"`
+			ServiceType string `json:"serviceType"`
+		}
+		json.Unmarshal(input, &in)
+		colMap := map[string]string{
+			"application": "applicationId",
+			"postgres":    "postgresId",
+			"mysql":       "mysqlId",
+			"mariadb":     "mariadbId",
+			"mongo":       "mongoId",
+			"redis":       "redisId",
+			"compose":     "composeId",
+		}
+		col, ok := colMap[in.ServiceType]
+		if !ok {
+			return []schema.Mount{}, nil
+		}
+		var mounts []schema.Mount
+		h.DB.Where(fmt.Sprintf("\"%s\" = ?", col), in.ServiceID).Find(&mounts)
+		if mounts == nil {
+			mounts = []schema.Mount{}
+		}
+		return mounts, nil
+	}
+
 	// ===== PORT =====
+	r["port.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			PortID string `json:"portId"`
+		}
+		json.Unmarshal(input, &in)
+		var p schema.Port
+		if err := h.DB.First(&p, "\"portId\" = ?", in.PortID).Error; err != nil {
+			return nil, &trpcErr{"Port not found", "NOT_FOUND", 404}
+		}
+		return p, nil
+	}
+
 	r["port.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var p schema.Port
 		json.Unmarshal(input, &p)
@@ -167,6 +206,18 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 	}
 
 	// ===== REDIRECTS =====
+	r["redirects.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			RedirectID string `json:"redirectId"`
+		}
+		json.Unmarshal(input, &in)
+		var rd schema.Redirect
+		if err := h.DB.First(&rd, "\"redirectId\" = ?", in.RedirectID).Error; err != nil {
+			return nil, &trpcErr{"Redirect not found", "NOT_FOUND", 404}
+		}
+		return rd, nil
+	}
+
 	r["redirects.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var rd schema.Redirect
 		json.Unmarshal(input, &rd)
@@ -195,6 +246,18 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 	}
 
 	// ===== SECURITY =====
+	r["security.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			SecurityID string `json:"securityId"`
+		}
+		json.Unmarshal(input, &in)
+		var s schema.Security
+		if err := h.DB.First(&s, "\"securityId\" = ?", in.SecurityID).Error; err != nil {
+			return nil, &trpcErr{"Security not found", "NOT_FOUND", 404}
+		}
+		return s, nil
+	}
+
 	r["security.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var s schema.Security
 		json.Unmarshal(input, &s)
@@ -260,6 +323,32 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		delete(in, "domainId")
 		h.DB.Model(&schema.Domain{}).Where("\"domainId\" = ?", id).Updates(in)
 		return true, nil
+	}
+
+	r["domain.byApplicationId"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ApplicationID string `json:"applicationId"`
+		}
+		json.Unmarshal(input, &in)
+		var domains []schema.Domain
+		h.DB.Where("\"applicationId\" = ?", in.ApplicationID).Find(&domains)
+		if domains == nil {
+			domains = []schema.Domain{}
+		}
+		return domains, nil
+	}
+
+	r["domain.byComposeId"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ComposeID string `json:"composeId"`
+		}
+		json.Unmarshal(input, &in)
+		var domains []schema.Domain
+		h.DB.Where("\"composeId\" = ?", in.ComposeID).Find(&domains)
+		if domains == nil {
+			domains = []schema.Domain{}
+		}
+		return domains, nil
 	}
 
 	r["domain.generateDomain"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

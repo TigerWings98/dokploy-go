@@ -119,6 +119,9 @@ func (h *Handler) registerDeploymentTRPC(r procedureRegistry) {
 	}
 
 	r["deployment.queueList"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Queue != nil {
+			return h.Queue.ListQueueJobs(), nil
+		}
 		return []interface{}{}, nil
 	}
 

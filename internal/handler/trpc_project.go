@@ -146,7 +146,21 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 
 		var srcProject schema.Project
-		if err := h.DB.Preload("Environments").First(&srcProject, "\"projectId\" = ?", in.ProjectID).Error; err != nil {
+		if err := h.DB.
+			Preload("Environments").
+			Preload("Environments.Applications").
+			Preload("Environments.Applications.Domains").
+			Preload("Environments.Applications.Ports").
+			Preload("Environments.Applications.Mounts").
+			Preload("Environments.Applications.Redirects").
+			Preload("Environments.Applications.Security").
+			Preload("Environments.Postgres").
+			Preload("Environments.MySQL").
+			Preload("Environments.MariaDB").
+			Preload("Environments.Mongo").
+			Preload("Environments.Redis").
+			Preload("Environments.Compose").
+			First(&srcProject, "\"projectId\" = ?", in.ProjectID).Error; err != nil {
 			return nil, &trpcErr{"Project not found", "NOT_FOUND", 404}
 		}
 
@@ -165,6 +179,104 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 				ProjectID: newProject.ProjectID,
 			}
 			h.DB.Create(&newEnv)
+
+			// Duplicate applications
+			for _, app := range env.Applications {
+				newApp := app
+				newApp.ApplicationID = ""
+				newApp.AppName = schema.GenerateAppName("app")
+				newApp.EnvironmentID = newEnv.EnvironmentID
+				newApp.Deployments = nil
+				newApp.Domains = nil
+				newApp.Ports = nil
+				newApp.Mounts = nil
+				newApp.Redirects = nil
+				newApp.Security = nil
+				newApp.Environment = nil
+				newApp.Server = nil
+				newApp.Registry = nil
+				newApp.CreatedAt = ""
+				h.DB.Create(&newApp)
+
+				for _, d := range app.Domains {
+					d.DomainID = ""
+					d.ApplicationID = &newApp.ApplicationID
+					h.DB.Create(&d)
+				}
+				for _, p := range app.Ports {
+					p.PortID = ""
+					p.ApplicationID = &newApp.ApplicationID
+					h.DB.Create(&p)
+				}
+				for _, m := range app.Mounts {
+					m.MountID = ""
+					m.ApplicationID = &newApp.ApplicationID
+					h.DB.Create(&m)
+				}
+				for _, rd := range app.Redirects {
+					rd.RedirectID = ""
+					rd.ApplicationID = &newApp.ApplicationID
+					h.DB.Create(&rd)
+				}
+				for _, s := range app.Security {
+					s.SecurityID = ""
+					s.ApplicationID = &newApp.ApplicationID
+					h.DB.Create(&s)
+				}
+			}
+
+			// Duplicate database services
+			for _, pg := range env.Postgres {
+				pg.PostgresID = ""
+				pg.AppName = schema.GenerateAppName("pg")
+				pg.EnvironmentID = newEnv.EnvironmentID
+				pg.CreatedAt = ""
+				h.DB.Create(&pg)
+			}
+			for _, my := range env.MySQL {
+				my.MySQLID = ""
+				my.AppName = schema.GenerateAppName("mysql")
+				my.EnvironmentID = newEnv.EnvironmentID
+				my.CreatedAt = ""
+				h.DB.Create(&my)
+			}
+			for _, ma := range env.MariaDB {
+				ma.MariaDBID = ""
+				ma.AppName = schema.GenerateAppName("maria")
+				ma.EnvironmentID = newEnv.EnvironmentID
+				ma.CreatedAt = ""
+				h.DB.Create(&ma)
+			}
+			for _, mo := range env.Mongo {
+				mo.MongoID = ""
+				mo.AppName = schema.GenerateAppName("mongo")
+				mo.EnvironmentID = newEnv.EnvironmentID
+				mo.CreatedAt = ""
+				h.DB.Create(&mo)
+			}
+			for _, rd := range env.Redis {
+				rd.RedisID = ""
+				rd.AppName = schema.GenerateAppName("redis")
+				rd.EnvironmentID = newEnv.EnvironmentID
+				rd.CreatedAt = ""
+				h.DB.Create(&rd)
+			}
+
+			// Duplicate compose services
+			for _, comp := range env.Compose {
+				comp.ComposeID = ""
+				comp.AppName = schema.GenerateAppName("compose")
+				comp.EnvironmentID = newEnv.EnvironmentID
+				comp.Deployments = nil
+				comp.Domains = nil
+				comp.Mounts = nil
+				comp.Security = nil
+				comp.Redirects = nil
+				comp.Environment = nil
+				comp.Server = nil
+				comp.CreatedAt = ""
+				h.DB.Create(&comp)
+			}
 		}
 
 		return newProject, nil

@@ -54,6 +54,9 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	e.GET("/ws/server-terminal", h.ServerTerminal)
 	e.GET("/terminal", h.ServerTerminal)
 
+	// tRPC WebSocket subscriptions (drawer logs)
+	e.GET("/drawer-logs", h.DrawerLogs)
+
 	// Frontend compatibility aliases (original Dokploy paths)
 	e.GET("/listen-deployment", h.DeploymentLogs)
 	e.GET("/docker-container-logs", h.ContainerLogs)

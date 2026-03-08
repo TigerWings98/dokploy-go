@@ -17,14 +17,10 @@ import (
 
 func (h *Handler) registerSSOTRPC(r procedureRegistry) {
 	r["sso.showSignInWithSSO"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		var owner schema.Member
-		if err := h.DB.Preload("User").Where("role = ?", "owner").Order("created_at ASC").First(&owner).Error; err != nil {
-			return false, nil
-		}
-		if owner.User == nil {
-			return false, nil
-		}
-		return owner.User.EnableEnterpriseFeatures && owner.User.IsValidEnterpriseLicense, nil
+		// Go 版不做企业许可证检查，只要有配置 SSO 提供商就显示 SSO 登录入口
+		var count int64
+		h.DB.Model(&schema.SSOProvider{}).Count(&count)
+		return count > 0, nil
 	}
 
 	r["sso.listProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

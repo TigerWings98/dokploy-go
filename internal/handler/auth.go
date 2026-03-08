@@ -30,6 +30,9 @@ func (h *Handler) registerAuthRoutes(g *echo.Group) {
 	g.GET("/ok", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]interface{}{"ok": true})
 	})
+
+	// SSO endpoints (OIDC + SAML)
+	h.registerSSOAuthRoutes(g)
 }
 
 // SignUpEmail handles POST /api/auth/sign-up/email

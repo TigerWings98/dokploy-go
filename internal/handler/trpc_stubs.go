@@ -119,12 +119,45 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 		return true, nil
 	}
 	r["licenseKey.haveValidLicenseKey"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return false, nil
+		// 从数据库读取 owner 用户的 enableEnterpriseFeatures 字段
+		// 用户需在设置页面手动开启
+		var owner schema.Member
+		if err := h.DB.Preload("User").Where("role = ?", "owner").Order("created_at ASC").First(&owner).Error; err != nil {
+			return false, nil
+		}
+		if owner.User == nil {
+			return false, nil
+		}
+		return owner.User.EnableEnterpriseFeatures, nil
 	}
 	r["licenseKey.getEnterpriseSettings"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{"enabled": false}, nil
+		var owner schema.Member
+		if err := h.DB.Preload("User").Where("role = ?", "owner").Order("created_at ASC").First(&owner).Error; err != nil {
+			return map[string]interface{}{"enabled": false}, nil
+		}
+		if owner.User == nil {
+			return map[string]interface{}{"enabled": false}, nil
+		}
+		return map[string]interface{}{
+			"enabled":                  owner.User.EnableEnterpriseFeatures,
+			"licenseKey":               "",
+			"isValidEnterpriseLicense": owner.User.EnableEnterpriseFeatures,
+		}, nil
 	}
 	r["licenseKey.updateEnterpriseSettings"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			Enabled bool `json:"enabled"`
+		}
+		json.Unmarshal(input, &in)
+		// 找到 owner 用户，更新企业功能开关
+		var owner schema.Member
+		if err := h.DB.Preload("User").Where("role = ?", "owner").Order("created_at ASC").First(&owner).Error; err != nil {
+			return nil, &trpcErr{"Owner not found", "NOT_FOUND", 404}
+		}
+		h.DB.Model(owner.User).Updates(map[string]interface{}{
+			"enableEnterpriseFeatures": in.Enabled,
+			"isValidEnterpriseLicense": in.Enabled,
+		})
 		return true, nil
 	}
 

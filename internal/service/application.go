@@ -287,6 +287,110 @@ func (s *ApplicationService) createServiceRemote(app *schema.Application, writeL
 	return err
 }
 
+// Rebuild rebuilds an application without re-cloning source code.
+// 对应 TS 版 rebuildApplication：跳过 git clone，仅从已有代码 build + 重启服务。
+func (s *ApplicationService) Rebuild(appID string, titleOverride, descOverride *string) error {
+	app, err := s.FindByID(appID)
+	if err != nil {
+		return fmt.Errorf("application not found: %w", err)
+	}
+
+	title := fmt.Sprintf("Rebuild %s", app.Name)
+	if titleOverride != nil {
+		title = *titleOverride
+	}
+
+	now := time.Now().UTC()
+	logPath := filepath.Join(s.cfg.Paths.LogsPath, app.AppName, fmt.Sprintf("%d.log", now.UnixMilli()))
+	os.MkdirAll(filepath.Dir(logPath), 0755)
+
+	deployment := &schema.Deployment{
+		Title:         title,
+		Description:   descOverride,
+		LogPath:       logPath,
+		ApplicationID: &app.ApplicationID,
+		ServerID:      app.ServerID,
+	}
+
+	if err := s.db.Create(deployment).Error; err != nil {
+		return fmt.Errorf("failed to create deployment: %w", err)
+	}
+
+	s.updateStatus(app.ApplicationID, schema.ApplicationStatusRunning)
+	go s.runRebuild(app, deployment)
+	return nil
+}
+
+func (s *ApplicationService) runRebuild(app *schema.Application, deployment *schema.Deployment) {
+	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		s.failDeployment(deployment.DeploymentID, app.ApplicationID, fmt.Sprintf("Failed to open log file: %v", err))
+		return
+	}
+	defer logFile.Close()
+
+	writeLog := func(msg string) {
+		logFile.WriteString(msg + "\n")
+	}
+
+	writeLog(fmt.Sprintf("Rebuilding %s (%s) - skipping source clone", app.Name, app.AppName))
+
+	// 跳过 prepareSource，直接 build
+	buildDir := filepath.Join(s.cfg.Paths.ApplicationsPath, app.AppName, "code")
+	writeLog("--- Building application ---")
+	if err := s.buildApplication(app, buildDir, writeLog); err != nil {
+		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+		return
+	}
+
+	writeLog("--- Creating Docker service ---")
+	if err := s.createService(app, writeLog); err != nil {
+		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.db.Model(&schema.Deployment{}).
+		Where("\"deploymentId\" = ?", deployment.DeploymentID).
+		Updates(map[string]interface{}{
+			"status":     schema.DeploymentStatusDone,
+			"finishedAt": now,
+		})
+	s.updateStatus(app.ApplicationID, schema.ApplicationStatusDone)
+	writeLog("Rebuild completed successfully!")
+}
+
+// Reload restarts the Docker service without rebuilding.
+// 对应 TS 版 reload：同步操作，仅 docker service update --force 重启容器。
+func (s *ApplicationService) Reload(appID string) error {
+	app, err := s.FindByID(appID)
+	if err != nil {
+		return err
+	}
+
+	s.updateStatus(appID, schema.ApplicationStatusIdle)
+
+	if app.ServerID != nil && app.Server != nil && app.Server.SSHKey != nil {
+		conn := process.SSHConnection{
+			Host:       app.Server.IPAddress,
+			Port:       app.Server.Port,
+			Username:   app.Server.Username,
+			PrivateKey: app.Server.SSHKey.PrivateKey,
+		}
+		_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("docker service update --force %s", app.AppName), nil)
+	} else {
+		_, err = process.ExecAsync(fmt.Sprintf("docker service update --force %s", app.AppName))
+	}
+
+	if err != nil {
+		s.updateStatus(appID, schema.ApplicationStatusError)
+		return err
+	}
+
+	s.updateStatus(appID, schema.ApplicationStatusDone)
+	return nil
+}
+
 // Stop stops an application's Docker service.
 func (s *ApplicationService) Stop(appID string) error {
 	app, err := s.FindByID(appID)

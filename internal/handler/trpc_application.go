@@ -163,7 +163,23 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	r["application.redeploy"] = r["application.deploy"]
+	// redeploy = rebuild（仅 build，不重新 clone 代码）
+	r["application.redeploy"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ApplicationID string  `json:"applicationId"`
+			Title         *string `json:"title"`
+			Description   *string `json:"description"`
+		}
+		json.Unmarshal(input, &in)
+		if h.Queue != nil {
+			info, err := h.Queue.EnqueueRebuildApplication(in.ApplicationID, in.Title, in.Description)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]string{"message": "Rebuild queued", "taskId": info.ID}, nil
+		}
+		return true, nil
+	}
 
 	// stop/start 是同步操作（与 TS 版一致），不走队列
 	r["application.stop"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -188,13 +204,12 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	// reload = 仅重启容器（同步操作，不 build，与 TS 版一致）
 	r["application.reload"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ApplicationID string `json:"applicationId"` }
 		json.Unmarshal(input, &in)
-		// Reload redeploys the application (same as deploy with no title/description)
-		if h.Queue != nil {
-			_, err := h.Queue.EnqueueDeployApplication(in.ApplicationID, nil, nil)
-			if err != nil {
+		if h.AppSvc != nil {
+			if err := h.AppSvc.Reload(in.ApplicationID); err != nil {
 				return nil, err
 			}
 		}

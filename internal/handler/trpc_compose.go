@@ -168,7 +168,22 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	r["compose.redeploy"] = r["compose.deploy"]
+	// redeploy = rebuild（仅 compose up，不重新 clone 代码）
+	r["compose.redeploy"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ComposeID string  `json:"composeId"`
+			Title     *string `json:"title"`
+		}
+		json.Unmarshal(input, &in)
+		if h.Queue != nil {
+			info, err := h.Queue.EnqueueRebuildCompose(in.ComposeID, in.Title)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]string{"message": "Rebuild queued", "taskId": info.ID}, nil
+		}
+		return true, nil
+	}
 
 	// compose.start: 同步执行 docker compose up -d（不 rebuild），与 TS 版一致
 	r["compose.start"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

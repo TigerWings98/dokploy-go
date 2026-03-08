@@ -42,9 +42,11 @@ const (
 	TaskDeployCompose     = "deploy:compose"
 	TaskDeployDatabase    = "deploy:database"
 	TaskRebuildDatabase   = "rebuild:database"
-	TaskStopApplication   = "stop:application"
-	TaskStartApplication  = "start:application"
-	TaskStopCompose       = "stop:compose"
+	TaskRebuildApplication = "rebuild:application"
+	TaskRebuildCompose     = "rebuild:compose"
+	TaskStopApplication    = "stop:application"
+	TaskStartApplication   = "start:application"
+	TaskStopCompose        = "stop:compose"
 	TaskBackupRun         = "backup:run"
 	TaskDockerCleanup     = "docker:cleanup"
 )
@@ -145,6 +147,17 @@ func (q *Queue) EnqueueDeployApplication(appID string, title, description *strin
 	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
 }
 
+// EnqueueRebuildApplication enqueues an application rebuild (build without clone).
+func (q *Queue) EnqueueRebuildApplication(appID string, title, description *string) (*asynq.TaskInfo, error) {
+	payload, _ := json.Marshal(DeployApplicationPayload{
+		ApplicationID: appID,
+		Title:         title,
+		Description:   description,
+	})
+	task := asynq.NewTask(TaskRebuildApplication, payload)
+	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
+}
+
 // EnqueueDeployCompose enqueues a compose deployment.
 func (q *Queue) EnqueueDeployCompose(composeID string, title *string) (*asynq.TaskInfo, error) {
 	payload, _ := json.Marshal(DeployComposePayload{
@@ -152,6 +165,16 @@ func (q *Queue) EnqueueDeployCompose(composeID string, title *string) (*asynq.Ta
 		Title:     title,
 	})
 	task := asynq.NewTask(TaskDeployCompose, payload)
+	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
+}
+
+// EnqueueRebuildCompose enqueues a compose rebuild (compose up without clone).
+func (q *Queue) EnqueueRebuildCompose(composeID string, title *string) (*asynq.TaskInfo, error) {
+	payload, _ := json.Marshal(DeployComposePayload{
+		ComposeID: composeID,
+		Title:     title,
+	})
+	task := asynq.NewTask(TaskRebuildCompose, payload)
 	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
 }
 
@@ -227,10 +250,12 @@ type Worker struct {
 
 // TaskHandlers holds the service dependencies for task handlers.
 type TaskHandlers struct {
-	HandleDeployApplication func(ctx context.Context, payload DeployApplicationPayload) error
-	HandleDeployCompose     func(ctx context.Context, payload DeployComposePayload) error
-	HandleDeployDatabase    func(ctx context.Context, payload DeployDatabasePayload) error
-	HandleRebuildDatabase   func(ctx context.Context, payload DeployDatabasePayload) error
+	HandleDeployApplication  func(ctx context.Context, payload DeployApplicationPayload) error
+	HandleRebuildApplication func(ctx context.Context, payload DeployApplicationPayload) error
+	HandleDeployCompose      func(ctx context.Context, payload DeployComposePayload) error
+	HandleRebuildCompose     func(ctx context.Context, payload DeployComposePayload) error
+	HandleDeployDatabase     func(ctx context.Context, payload DeployDatabasePayload) error
+	HandleRebuildDatabase    func(ctx context.Context, payload DeployDatabasePayload) error
 	HandleStopCompose       func(ctx context.Context, payload SimpleIDPayload) error
 	HandleStopApplication   func(ctx context.Context, payload SimpleIDPayload) error
 	HandleStartApplication  func(ctx context.Context, payload SimpleIDPayload) error
@@ -256,7 +281,9 @@ func NewWorker(redisAddr string, concurrency int, handlers TaskHandlers) *Worker
 
 	// Register handlers
 	mux.HandleFunc(TaskDeployApplication, makeHandler(handlers.HandleDeployApplication))
+	mux.HandleFunc(TaskRebuildApplication, makeHandler(handlers.HandleRebuildApplication))
 	mux.HandleFunc(TaskDeployCompose, makeHandler(handlers.HandleDeployCompose))
+	mux.HandleFunc(TaskRebuildCompose, makeHandler(handlers.HandleRebuildCompose))
 	mux.HandleFunc(TaskDeployDatabase, makeHandler(handlers.HandleDeployDatabase))
 	mux.HandleFunc(TaskRebuildDatabase, makeHandler(handlers.HandleRebuildDatabase))
 	mux.HandleFunc(TaskStopCompose, makeHandler(handlers.HandleStopCompose))

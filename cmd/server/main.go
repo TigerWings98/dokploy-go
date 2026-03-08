@@ -103,9 +103,17 @@ func main() {
 				log.Printf("Deploy application: %s", payload.ApplicationID)
 				return appSvc.Deploy(payload.ApplicationID, payload.Title, payload.Description)
 			},
+			HandleRebuildApplication: func(ctx context.Context, payload queue.DeployApplicationPayload) error {
+				log.Printf("Rebuild application: %s", payload.ApplicationID)
+				return appSvc.Rebuild(payload.ApplicationID, payload.Title, payload.Description)
+			},
 			HandleDeployCompose: func(ctx context.Context, payload queue.DeployComposePayload) error {
 				log.Printf("Deploy compose: %s", payload.ComposeID)
 				return composeSvc.Deploy(payload.ComposeID, payload.Title)
+			},
+			HandleRebuildCompose: func(ctx context.Context, payload queue.DeployComposePayload) error {
+				log.Printf("Rebuild compose: %s", payload.ComposeID)
+				return composeSvc.Rebuild(payload.ComposeID, payload.Title)
 			},
 			HandleDeployDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
 				log.Printf("Deploy database: %s (%s)", payload.DatabaseID, payload.Type)

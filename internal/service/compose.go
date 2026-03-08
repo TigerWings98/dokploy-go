@@ -81,6 +81,84 @@ func (s *ComposeService) Deploy(composeID string, titleOverride *string) error {
 	return nil
 }
 
+// Rebuild rebuilds a compose project without re-cloning source code.
+// 对应 TS 版 rebuildCompose：跳过 git clone，直接 compose up。
+// Raw 类型仍然写入 compose file（因为内容可能已更新）。
+func (s *ComposeService) Rebuild(composeID string, titleOverride *string) error {
+	compose, err := s.FindByID(composeID)
+	if err != nil {
+		return fmt.Errorf("compose not found: %w", err)
+	}
+
+	title := fmt.Sprintf("Rebuild %s", compose.Name)
+	if titleOverride != nil {
+		title = *titleOverride
+	}
+
+	now := time.Now().UTC()
+	logPath := filepath.Join(s.cfg.Paths.LogsPath, compose.AppName, fmt.Sprintf("%d.log", now.UnixMilli()))
+	os.MkdirAll(filepath.Dir(logPath), 0755)
+
+	deployment := &schema.Deployment{
+		Title:     title,
+		LogPath:   logPath,
+		ComposeID: &compose.ComposeID,
+		ServerID:  compose.ServerID,
+	}
+
+	if err := s.db.Create(deployment).Error; err != nil {
+		return fmt.Errorf("failed to create deployment: %w", err)
+	}
+
+	s.updateStatus(compose.ComposeID, schema.ApplicationStatusRunning)
+	go s.runRebuild(compose, deployment)
+	return nil
+}
+
+func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.Deployment) {
+	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+		return
+	}
+	defer logFile.Close()
+
+	writeLog := func(msg string) {
+		logFile.WriteString(msg + "\n")
+	}
+
+	writeLog(fmt.Sprintf("Rebuilding compose %s (%s) - skipping source clone", compose.Name, compose.AppName))
+
+	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
+	os.MkdirAll(composeDir, 0755)
+
+	// Raw 类型仍然写入最新的 compose file
+	if compose.SourceType == schema.SourceTypeComposeRaw {
+		composePath := filepath.Join(composeDir, "docker-compose.yml")
+		writeLog("Writing compose file from raw content")
+		if err := os.WriteFile(composePath, []byte(compose.ComposeFile), 0644); err != nil {
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+			return
+		}
+	}
+
+	// 直接 compose up（不 clone）
+	if err := s.composeUp(compose, composeDir, writeLog); err != nil {
+		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.db.Model(&schema.Deployment{}).
+		Where("\"deploymentId\" = ?", deployment.DeploymentID).
+		Updates(map[string]interface{}{
+			"status":     schema.DeploymentStatusDone,
+			"finishedAt": now,
+		})
+	s.updateStatus(compose.ComposeID, schema.ApplicationStatusDone)
+	writeLog("Compose rebuild completed successfully!")
+}
+
 func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.Deployment) {
 	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {

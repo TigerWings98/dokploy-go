@@ -231,6 +231,7 @@ type TaskHandlers struct {
 	HandleDeployCompose     func(ctx context.Context, payload DeployComposePayload) error
 	HandleDeployDatabase    func(ctx context.Context, payload DeployDatabasePayload) error
 	HandleRebuildDatabase   func(ctx context.Context, payload DeployDatabasePayload) error
+	HandleStopCompose       func(ctx context.Context, payload SimpleIDPayload) error
 	HandleStopApplication   func(ctx context.Context, payload SimpleIDPayload) error
 	HandleStartApplication  func(ctx context.Context, payload SimpleIDPayload) error
 	HandleBackupRun         func(ctx context.Context, payload SimpleIDPayload) error
@@ -258,6 +259,7 @@ func NewWorker(redisAddr string, concurrency int, handlers TaskHandlers) *Worker
 	mux.HandleFunc(TaskDeployCompose, makeHandler(handlers.HandleDeployCompose))
 	mux.HandleFunc(TaskDeployDatabase, makeHandler(handlers.HandleDeployDatabase))
 	mux.HandleFunc(TaskRebuildDatabase, makeHandler(handlers.HandleRebuildDatabase))
+	mux.HandleFunc(TaskStopCompose, makeHandler(handlers.HandleStopCompose))
 	mux.HandleFunc(TaskStopApplication, makeHandler(handlers.HandleStopApplication))
 	mux.HandleFunc(TaskStartApplication, makeHandler(handlers.HandleStartApplication))
 	mux.HandleFunc(TaskBackupRun, makeHandler(handlers.HandleBackupRun))

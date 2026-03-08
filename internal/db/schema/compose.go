@@ -23,6 +23,7 @@ type Compose struct {
 	SourceType    SourceTypeCompose `gorm:"column:sourceType;type:text;not null;default:'raw'" json:"sourceType"`
 	RefreshToken  *string           `gorm:"column:refreshToken;type:text" json:"refreshToken"`
 	ComposeStatus ApplicationStatus `gorm:"column:composeStatus;type:text;not null;default:'idle'" json:"composeStatus"`
+	ComposePath   string            `gorm:"column:composePath;type:text;not null;default:'./docker-compose.yml'" json:"composePath"`
 	Command       *string           `gorm:"column:command;type:text" json:"command"`
 	AutoDeploy    *bool             `gorm:"column:autoDeploy" json:"autoDeploy"`
 	RandomizeCompose *bool          `gorm:"column:randomize" json:"randomize"`

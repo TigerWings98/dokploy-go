@@ -203,7 +203,7 @@ func (s *ComposeService) composeUp(compose *schema.Compose, composeDir string, w
 	return err
 }
 
-// Stop stops a compose project.
+// Stop stops a compose project (与 TS 版一致：docker compose stop 或 docker stack rm)。
 func (s *ComposeService) Stop(composeID string) error {
 	compose, err := s.FindByID(composeID)
 	if err != nil {
@@ -211,7 +211,66 @@ func (s *ComposeService) Stop(composeID string) error {
 	}
 
 	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
-	cmd := fmt.Sprintf("docker compose -p %s down", compose.AppName)
+
+	switch compose.ComposeType {
+	case schema.ComposeTypeStack:
+		// Stack 模式：docker stack rm
+		cmd := fmt.Sprintf("docker stack rm %s", compose.AppName)
+		if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
+			conn := process.SSHConnection{
+				Host:       compose.Server.IPAddress,
+				Port:       compose.Server.Port,
+				Username:   compose.Server.Username,
+				PrivateKey: compose.Server.SSHKey.PrivateKey,
+			}
+			_, err = process.ExecAsyncRemote(conn, cmd, nil)
+		} else {
+			_, err = process.ExecAsyncStream(cmd, nil)
+		}
+	default:
+		// docker-compose 模式：docker compose stop（仅停止，不删除容器，与 TS 版一致）
+		cmd := fmt.Sprintf("docker compose -p %s stop", compose.AppName)
+		if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
+			conn := process.SSHConnection{
+				Host:       compose.Server.IPAddress,
+				Port:       compose.Server.Port,
+				Username:   compose.Server.Username,
+				PrivateKey: compose.Server.SSHKey.PrivateKey,
+			}
+			_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("cd %s && %s", composeDir, cmd), nil)
+		} else {
+			_, err = process.ExecAsyncStream(cmd, nil, process.WithDir(composeDir))
+		}
+	}
+
+	if err != nil {
+		s.updateStatus(composeID, schema.ApplicationStatusError)
+		return err
+	}
+
+	s.updateStatus(composeID, schema.ApplicationStatusIdle)
+	return nil
+}
+
+// Start starts a stopped compose project (与 TS 版一致：docker compose up -d，不 rebuild)。
+func (s *ComposeService) Start(composeID string) error {
+	compose, err := s.FindByID(composeID)
+	if err != nil {
+		return err
+	}
+
+	// Stack 模式无 start 概念（需要重新 deploy），仅支持 docker-compose 模式
+	if compose.ComposeType == schema.ComposeTypeStack {
+		return fmt.Errorf("stack compose does not support start, use deploy instead")
+	}
+
+	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName, "code")
+	// 使用数据库中的 composePath（与 TS 版一致）
+	composePath := compose.ComposePath
+	if composePath == "" {
+		composePath = "./docker-compose.yml"
+	}
+	cmd := fmt.Sprintf("docker compose -p %s -f %s up -d", compose.AppName, composePath)
 
 	if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
 		conn := process.SSHConnection{
@@ -226,10 +285,11 @@ func (s *ComposeService) Stop(composeID string) error {
 	}
 
 	if err != nil {
+		s.updateStatus(composeID, schema.ApplicationStatusIdle)
 		return err
 	}
 
-	s.updateStatus(composeID, schema.ApplicationStatusIdle)
+	s.updateStatus(composeID, schema.ApplicationStatusDone)
 	return nil
 }
 

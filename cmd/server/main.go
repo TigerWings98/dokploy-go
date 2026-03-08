@@ -115,6 +115,10 @@ func main() {
 				log.Printf("Rebuild database: %s (%s)", payload.DatabaseID, payload.Type)
 				return dbSvc.RebuildDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
 			},
+			HandleStopCompose: func(ctx context.Context, payload queue.SimpleIDPayload) error {
+				log.Printf("Stop compose: %s", payload.ID)
+				return composeSvc.Stop(payload.ID)
+			},
 			HandleStopApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 				log.Printf("Stop application: %s", payload.ID)
 				return appSvc.Stop(payload.ID)
@@ -169,6 +173,7 @@ func main() {
 		handler.WithScheduler(sched),
 		handler.WithBackupService(backupSvc),
 		handler.WithPreviewService(previewSvc),
+		handler.WithComposeService(composeSvc),
 	)
 	h.RegisterRoutes(e)
 

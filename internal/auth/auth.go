@@ -5,6 +5,8 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"net/http"
 
@@ -52,10 +54,19 @@ func (a *Auth) ValidateSession(token string) (*schema.User, *schema.Session, err
 	return &user, &session, nil
 }
 
+// hashAPIKey 对 API Key 进行 SHA-256 哈希 + base64url 编码（无 padding），
+// 与 Better Auth 的 defaultKeyHasher 完全一致。
+func hashAPIKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return base64.RawURLEncoding.EncodeToString(h[:])
+}
+
 // ValidateAPIKey validates an API key and returns the associated user.
+// Better Auth 存储的是哈希后的 key，需要先哈希再查询。
 func (a *Auth) ValidateAPIKey(key string) (*schema.User, error) {
+	hashed := hashAPIKey(key)
 	var apiKey schema.APIKey
-	err := a.db.Where("key = ?", key).First(&apiKey).Error
+	err := a.db.Where("key = ?", hashed).First(&apiKey).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUnauthorized

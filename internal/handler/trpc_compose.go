@@ -169,16 +169,29 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	}
 
 	r["compose.redeploy"] = r["compose.deploy"]
-	r["compose.start"] = r["compose.deploy"]
 
+	// compose.start: 同步执行 docker compose up -d（不 rebuild），与 TS 版一致
+	r["compose.start"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct{ ComposeID string `json:"composeId"` }
+		json.Unmarshal(input, &in)
+		if h.ComposeSvc == nil {
+			return nil, &trpcErr{"Compose service not available", "INTERNAL_SERVER_ERROR", 500}
+		}
+		if err := h.ComposeSvc.Start(in.ComposeID); err != nil {
+			return nil, err
+		}
+		return true, nil
+	}
+
+	// compose.stop: 同步执行 docker compose stop，与 TS 版一致
 	r["compose.stop"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ComposeID string `json:"composeId"` }
 		json.Unmarshal(input, &in)
-		if h.Queue != nil {
-			_, err := h.Queue.EnqueueStopCompose(in.ComposeID)
-			if err != nil {
-				return nil, err
-			}
+		if h.ComposeSvc == nil {
+			return nil, &trpcErr{"Compose service not available", "INTERNAL_SERVER_ERROR", 500}
+		}
+		if err := h.ComposeSvc.Stop(in.ComposeID); err != nil {
+			return nil, err
 		}
 		return true, nil
 	}

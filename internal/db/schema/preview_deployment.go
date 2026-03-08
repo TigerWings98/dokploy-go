@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: PreviewDeployment struct (含 pullRequestId/branch/appName/previewStatus 等字段)
+// Role: PR 预览部署数据表模型，支持 GitHub/GitLab/Gitea/Bitbucket PR 生命周期管理
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

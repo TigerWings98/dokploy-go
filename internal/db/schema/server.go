@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid, database/sql/driver, encoding/json
+// Output: Server struct (含 ipAddress/port/sshKeyId/serverStatus 等字段) + ServerDeployment struct
+// Role: 远程服务器和服务器部署记录数据表模型，关联 SSHKey/Organization，支持自定义 JSON 序列化
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

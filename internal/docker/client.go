@@ -1,3 +1,7 @@
+// Input: Docker SDK (github.com/docker/docker), 环境变量 (DOCKER_API_VERSION/HOST/PORT)
+// Output: Client struct (24 个方法：容器/服务/网络/清理/Registry 操作)
+// Role: Docker SDK 封装层，提供容器列表/日志/统计、Swarm 服务 CRUD、网络管理、系统清理等操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package docker
 
 import (

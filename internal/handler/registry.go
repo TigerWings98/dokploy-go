@@ -1,3 +1,7 @@
+// Input: db (Registry 表), docker (Registry 登录测试)
+// Output: Registry CRUD + 登录测试的 tRPC procedure 实现
+// Role: 容器镜像仓库管理 handler，支持自托管和云端 Registry 配置
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

@@ -1,3 +1,7 @@
+// Input: 无外部依赖
+// Output: 30+ 类型常量 (ApplicationStatus, BuildType, DatabaseType, NotificationType, MemberRole 等)
+// Role: 全局枚举定义，统一业务状态/类型的字符串常量，对应 TS 版 Drizzle schema 中的枚举字段
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 // ApplicationStatus represents the status of an application/service.

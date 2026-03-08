@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (Schedule 表), scheduler (cron 管理)
+// Output: registerScheduleTRPC - Schedule 领域的 tRPC procedure 注册
+// Role: Schedule tRPC 路由注册，将 schedule.* procedure 绑定到定时任务管理操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

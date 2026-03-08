@@ -1,3 +1,7 @@
+// Input: gopkg.in/yaml.v3, 文件系统 (Traefik dynamic 目录)
+// Output: Traefik YAML 配置类型 (DynamicConfig, Router, Service, Middleware 等) + 读写函数
+// Role: Traefik v3 动态配置类型定义和文件读写，支持 HTTP/TCP router、AddPrefix/BasicAuth 中间件
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package traefik
 
 import (

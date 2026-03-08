@@ -1,3 +1,7 @@
+// Input: Bitbucket REST API (api.bitbucket.org), app password
+// Output: BitbucketProvider (ListRepos/ListBranches/GetRepository)
+// Role: Bitbucket API 客户端，查询用户仓库和分支信息
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package provider
 
 import (

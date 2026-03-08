@@ -1,3 +1,7 @@
+// Input: 环境变量配置, PostgreSQL, Redis, Docker Engine
+// Output: HTTP 服务 (Echo), WebSocket 端点, asynq Worker
+// Role: 主服务入口，初始化所有依赖并启动 HTTP 服务器、WebSocket 和部署队列 Worker
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package main
 
 import (

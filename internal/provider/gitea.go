@@ -1,3 +1,7 @@
+// Input: Gitea REST API (自定义 apiUrl), access token
+// Output: GiteaProvider (ListRepos/ListBranches/GetRepository)
+// Role: Gitea API 客户端，支持自托管实例，查询用户仓库和分支信息
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package provider
 
 import (

@@ -1,3 +1,7 @@
+// Input: db (Deployment 表), docker (服务回滚)
+// Output: Application/Compose 回滚到指定部署版本的 tRPC procedure 实现
+// Role: 部署回滚 handler，基于历史部署记录执行服务版本回退
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

@@ -1,3 +1,7 @@
+// Input: 环境变量配置, PostgreSQL, Redis, API Key
+// Output: 外部 REST API 服务
+// Role: 外部部署队列 API 入口，接收部署请求并入队 asynq
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package main
 
 import (

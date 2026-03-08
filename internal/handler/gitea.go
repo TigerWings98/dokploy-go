@@ -1,3 +1,7 @@
+// Input: db (GitProvider 表), provider/gitea
+// Output: Gitea 仓库/分支列表查询的 tRPC procedure 实现
+// Role: Gitea 专属 handler，通过 Gitea API 查询用户仓库和分支
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

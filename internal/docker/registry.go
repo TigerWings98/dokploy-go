@@ -1,3 +1,7 @@
+// Input: Docker SDK (docker login), Registry 配置 (username/password/registryURL/imagePrefix)
+// Output: BuildImageWithRegistry (构建+推送), PullImageWithRegistry (拉取), FormatImageName (镜像名格式化)
+// Role: Registry 认证和镜像操作封装，处理私有仓库的 docker login/build/push/pull 流程
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package docker
 
 import (

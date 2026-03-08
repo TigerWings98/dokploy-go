@@ -1,3 +1,7 @@
+// Input: gorm.DB, HTTP Request (Cookie/Header)
+// Output: ValidateSession (User+Session), ValidateAPIKey (User), GetSessionTokenFromRequest, GetAPIKeyFromRequest
+// Role: 认证核心，验证 Better Auth 兼容的 session token 和 API Key，从请求中提取认证凭证
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package auth
 
 import (

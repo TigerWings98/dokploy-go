@@ -1,3 +1,7 @@
+// Input: db (GitProvider 表), provider (GitHub/GitLab/Gitea/Bitbucket API)
+// Output: GitProvider CRUD + 仓库/分支列表查询的 tRPC procedure 实现
+// Role: Git 提供商管理 handler，配置 API 凭证并查询远程仓库信息
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

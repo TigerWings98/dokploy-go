@@ -1,3 +1,7 @@
+// Input: asynq (Redis 任务队列), 部署任务负载 (applicationId/composeId 等)
+// Output: Queue (Enqueue/StartWorker), 支持 application/compose/database 部署任务
+// Role: 异步任务队列，通过 Redis + asynq 调度部署任务，解耦 HTTP 请求与耗时部署操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package queue
 
 import (

@@ -1,3 +1,7 @@
+// Input: db (Notification 表), notify (多渠道通知发送)
+// Output: Notification CRUD + 测试通知的 tRPC procedure 实现
+// Role: 通知配置管理 handler，支持 Slack/Telegram/Discord/Email 等渠道的配置和测试
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

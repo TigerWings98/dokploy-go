@@ -1,3 +1,7 @@
+// Input: 环境变量 DATABASE_URL/POSTGRES_*/DOCKER_*/BETTER_AUTH_SECRET/IS_CLOUD/GO_ENV, 文件系统 /.dockerenv
+// Output: Config struct (含 DatabaseURL, Docker 配置, 认证密钥, Paths 路径体系), CleanupCronJob 常量
+// Role: 全局配置中心，从环境变量加载数据库/Docker/认证配置，根据运行环境选择 /etc/dokploy 或 .docker/ 路径
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package config
 
 import (

@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid, pq
+// Output: Postgres/MySQL/MariaDB/Mongo/Redis struct + SwarmConfig 嵌入结构体
+// Role: 5 种数据库服务的数据表模型，共享 SwarmConfig (Swarm 编排字段)，关联 Server/Environment/Backup/Deployment
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

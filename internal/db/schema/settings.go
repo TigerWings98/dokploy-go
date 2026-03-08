@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: WebServerSettings struct (全局设置), Admin struct, SSHKey struct, Certificate struct, Registry struct, Environment struct, Destination struct, Schedule struct
+// Role: 系统级配置和资源管理表模型集合，涵盖服务器设置/SSH密钥/证书/Registry/环境变量/备份目标/定时任务
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

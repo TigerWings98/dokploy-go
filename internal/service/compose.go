@@ -1,3 +1,7 @@
+// Input: db, docker, git, compose/transform, config
+// Output: ComposeService (DeployCompose 全流程: clone→compose transform→docker compose up/stack deploy)
+// Role: Compose 部署编排服务，支持 docker-compose 和 stack 两种部署模式
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package service
 
 import (

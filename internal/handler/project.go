@@ -1,3 +1,7 @@
+// Input: db (Project 表 + 关联的 Application/Compose/Database)
+// Output: Project CRUD 的 tRPC procedure 实现
+// Role: 项目管理 handler，处理项目的创建/更新/删除/列表/详情查询
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

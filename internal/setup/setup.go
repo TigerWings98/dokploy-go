@@ -1,3 +1,7 @@
+// Input: config (路径配置), docker (Docker SDK 客户端)
+// Output: Setup (Initialize 全流程: 目录创建→Swarm→网络→Traefik 配置→中间件→服务部署→LetsEncrypt)
+// Role: 本地服务器初始化引擎，负责首次启动时的基础设施配置
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package setup
 
 import (

@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Patch struct (含 type/status/patch/applicationId 等字段)，PatchType/PatchStatus 枚举
+// Role: 应用补丁管理数据表模型，记录对 Application/Compose 的 create/update/delete 操作及其状态
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

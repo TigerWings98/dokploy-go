@@ -1,3 +1,7 @@
+// Input: db, auth, config, queue, docker, traefik, notify, scheduler, backup, service 等全部核心模块
+// Output: Handler struct + Options 模式构造 + SetupRoutes 路由注册
+// Role: 路由中枢，通过 Options 模式注入所有依赖，注册 tRPC/WS/静态文件/Auth 等全部 HTTP 路由
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

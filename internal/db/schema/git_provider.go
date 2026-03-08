@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: GitProvider struct (含 providerType/apiUrl/accessToken 等字段)
+// Role: Git 提供商配置数据表模型，存储 GitHub/GitLab/Gitea/Bitbucket 的 API 凭证和连接信息
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

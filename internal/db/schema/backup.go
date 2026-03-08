@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Destination struct (S3 备份目的地), Backup struct (数据库备份记录), VolumeBackup struct (卷备份记录)
+// Role: 备份相关数据表模型，包含 S3 连接配置、Cron 表达式、备份状态追踪，关联 Organization 和各数据库类型
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

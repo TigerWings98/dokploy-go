@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: User/Session/Account/Verification/Organization/Member/Invitation/APIKey struct
+// Role: Better Auth 兼容的用户认证体系数据表模型，涵盖用户/会话/OAuth账号/组织/成员/API密钥
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

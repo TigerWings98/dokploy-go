@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Domain struct (含 host/path/port/https/certificateType 等字段) + Redirect/Security struct
+// Role: 域名路由数据表模型，关联 Application/Compose/PreviewDeployment，驱动 Traefik 动态路由配置生成
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

@@ -1,3 +1,7 @@
+// Input: database/sql/driver, encoding/json, github.com/lib/pq
+// Output: StringArray (pq.StringArray 别名), JSON[T] 泛型类型 (GORM JSONB 字段序列化/反序列化)
+// Role: 自定义数据库类型，为 GORM 提供 PostgreSQL text[] 和 JSONB 字段的 Go 映射
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

@@ -1,3 +1,7 @@
+// Input: Notification 配置 (Slack/Telegram/Discord/Email/Gotify/Ntfy webhook/token)
+// Output: Notifier (SendNotification 多渠道分发), 支持 Slack/Telegram/Discord/Email/Gotify/Ntfy/Webhook
+// Role: 多渠道通知分发器，根据 NotificationType 选择对应渠道发送构建/备份/清理等事件通知
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package notify
 
 import (

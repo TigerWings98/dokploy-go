@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Mount struct (含 type/hostPath/mountPath/content 等字段) + Port struct (含 publishedPort/targetPort/protocol)
+// Role: 挂载和端口映射数据表模型，关联 Application/Compose/PreviewDeployment
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

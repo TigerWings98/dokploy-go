@@ -1,3 +1,7 @@
+// Input: handler 依赖 (db/middleware/schema)
+// Output: buildRegistry() 注册 351 个 tRPC procedure，getDefaultMember() 提供组织成员上下文
+// Role: tRPC 路由注册中心，将所有领域 handler 的 procedure 汇聚到统一的 procedureRegistry
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

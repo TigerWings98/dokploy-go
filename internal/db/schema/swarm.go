@@ -1,3 +1,7 @@
+// Input: 无外部依赖
+// Output: Docker Swarm 配置类型 (HealthCheckSwarm, RestartPolicySwarm, PlacementSwarm, ServiceModeSwarm, NetworkSwarm 等)
+// Role: Docker Swarm Service Spec 的 Go 结构体映射，用于 Application 表的 JSONB 字段反序列化
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 // HealthCheckSwarm represents Docker Swarm health check configuration.

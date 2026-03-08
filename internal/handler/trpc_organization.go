@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (Organization/Member/Invitation 表)
+// Output: registerOrganizationTRPC - Organization 领域的 tRPC procedure 注册
+// Role: Organization tRPC 路由注册，将 organization.* procedure 绑定到组织管理操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

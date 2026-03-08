@@ -1,3 +1,7 @@
+// Input: db (Schedule 表), scheduler (cron 任务管理)
+// Output: Schedule CRUD + 立即执行的 tRPC procedure 实现
+// Role: 定时任务管理 handler，配置 cron 表达式和自定义脚本执行
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

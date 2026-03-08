@@ -1,3 +1,7 @@
+// Input: 前缀字符串 (如 "app", "compose")
+// Output: GenerateAppName 函数 (生成 "{prefix}-{verb}-{adj}-{noun}-{6字符随机}" 格式名称), CleanAppName, AppNameRegex
+// Role: 应用名生成器，使用与原 TS 版完全一致的词库和格式，确保命名风格兼容
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

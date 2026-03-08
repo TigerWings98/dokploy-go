@@ -1,3 +1,7 @@
+// Input: db (Compose 表 + Domain/Mount/Deployment), docker, traefik, compose/transform
+// Output: Compose 服务 CRUD + 部署/停止/重建 + 域名管理的 tRPC procedure 实现
+// Role: Docker Compose 服务管理 handler，支持 docker-compose 和 stack 两种部署模式
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

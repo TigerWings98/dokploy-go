@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (Server 表), setup, process/ssh
+// Output: registerServerTRPC - Server 领域的 tRPC procedure 注册
+// Role: Server tRPC 路由注册，将 server.* procedure 绑定到远程服务器管理操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

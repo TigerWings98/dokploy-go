@@ -1,3 +1,7 @@
+// Input: Git 提供商配置 (GitHub/GitLab/Gitea/Bitbucket token + SSH key), 仓库信息
+// Output: CloneRepository (带认证的 git clone), CloneCustomGit (自定义 Git URL + SSH key 克隆)
+// Role: 带认证的 Git 克隆引擎，根据 SourceType 选择 HTTPS token 或 SSH key 认证方式
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package git
 
 import (

@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (WebServerSettings/Admin 表), setup (LetsEncrypt)
+// Output: registerSettingsTRPC - Settings/Admin 领域的 tRPC procedure 注册
+// Role: Settings tRPC 路由注册，将 settings/admin.* procedure 绑定到系统设置和管理员操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

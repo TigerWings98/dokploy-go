@@ -1,3 +1,7 @@
+// Input: golang.org/x/crypto/ssh, SSHConnection 配置 (host/port/username/privateKey)
+// Output: SSHExec (远程命令执行), SSHExecWithCallback (远程执行+实时日志回调)
+// Role: 远程 SSH 命令执行引擎，为远程服务器操作提供 SSH 通道执行和日志流转
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package process
 
 import (

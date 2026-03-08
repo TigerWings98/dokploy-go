@@ -1,3 +1,7 @@
+// Input: schema.Domain/Redirect/Security, config.Paths
+// Output: Manager (CreateDomainConfig/RemoveDomainConfig/CreateSecurityMiddleware 等)
+// Role: Traefik 动态路由管理器，根据 Domain/Redirect/Security 配置生成和管理 YAML 配置文件
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package traefik
 
 import (

@@ -1,3 +1,7 @@
+// Input: db (User 表), crypto/rand, bcrypt
+// Output: User profile 更新/2FA 管理/密码修改的 tRPC procedure 实现
+// Role: 用户管理 handler，处理用户信息更新、密码修改、2FA 启用/禁用
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

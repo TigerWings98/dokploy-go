@@ -1,3 +1,7 @@
+// Input: db (PreviewDeployment 表), service/preview
+// Output: PreviewDeployment CRUD + PR 关联管理的 tRPC procedure 实现
+// Role: PR 预览部署管理 handler，处理预览环境的创建/更新/删除
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

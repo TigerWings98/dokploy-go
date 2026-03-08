@@ -1,3 +1,7 @@
+// Input: db (User/Session/Account/Organization/Member 表), bcrypt, crypto
+// Output: Better Auth 兼容的注册/登录/注销端点 (/api/auth/*)
+// Role: 认证端点 handler，实现 Better Auth 协议兼容的用户注册、密码登录和会话管理
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

@@ -1,3 +1,7 @@
+// Input: HTTP webhook 请求 (GitHub/GitLab/Gitea/Bitbucket), db, service
+// Output: Webhook 端点 (POST /api/deploy/:refreshToken)，触发自动部署/PR 预览
+// Role: Git webhook 接收器，验证签名后根据事件类型触发 Application/Compose 部署或 PR 预览管理
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

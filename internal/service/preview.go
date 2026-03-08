@@ -1,3 +1,7 @@
+// Input: db, docker, ApplicationService
+// Output: PreviewService (CreatePreview/DeployPreview/RemovePreview 生命周期管理)
+// Role: PR 预览部署服务，管理预览环境的创建/部署/销毁生命周期
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package service
 
 import (

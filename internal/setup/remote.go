@@ -1,3 +1,7 @@
+// Input: isBuildServer bool 参数
+// Output: GenerateServerSetupScript (12 步远程服务器初始化脚本), GenerateValidationScript (组件验证脚本)
+// Role: 远程服务器设置脚本生成器，生成安装 Docker/Swarm/Traefik/Nixpacks/Buildpacks 的 bash 脚本
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package setup
 
 import (

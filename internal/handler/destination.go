@@ -1,3 +1,7 @@
+// Input: db (Destination 表), backup (S3 连接测试)
+// Output: Destination (S3 备份目标) CRUD + 连接测试的 tRPC procedure 实现
+// Role: S3 备份目标管理 handler，配置 rclone 所需的 S3 凭证和存储桶信息
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (GitProvider 表), provider (4 种 Git API)
+// Output: registerGitProviderTRPC - GitProvider 领域的 tRPC procedure 注册
+// Role: GitProvider tRPC 路由注册，将 gitProvider/github/gitlab/gitea/bitbucket.* procedure 绑定
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

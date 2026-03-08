@@ -1,3 +1,7 @@
+// Input: gorilla/websocket, docker SDK, tRPC WS 订阅协议
+// Output: DrawerLogs WebSocket 端点 (tRPC subscription 兼容的实时日志流)
+// Role: tRPC 订阅兼容的 WebSocket 端点，为前端 Drawer 组件提供实时 Docker 服务日志
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package ws
 
 import (

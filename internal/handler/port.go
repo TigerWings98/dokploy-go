@@ -1,3 +1,7 @@
+// Input: db (Port 表)
+// Output: Port CRUD 的 tRPC procedure 实现
+// Role: 端口映射管理 handler，配置容器端口发布规则
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

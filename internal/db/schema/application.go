@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid, encoding/json
+// Output: Application struct (含 60+ 字段和 12 个关系), JSONField[T] 泛型序列化类型, BeforeCreate nanoid 生成
+// Role: 应用数据表模型，映射 application 表的全部字段（camelCase 列名），包含 Swarm JSONB 配置和 Git/Domain/Mount 等关系
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

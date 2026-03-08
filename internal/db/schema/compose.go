@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Compose struct (含 sourceType/composeType/composeFile 等字段和 Git/Domain/Deployment 关系)
+// Role: Docker Compose 服务数据表模型，支持 docker-compose 和 stack 两种部署模式，关联 Environment/Server/Git 提供商
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

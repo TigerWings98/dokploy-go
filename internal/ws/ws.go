@@ -1,3 +1,7 @@
+// Input: gorilla/websocket, docker SDK, process/ssh
+// Output: 5 个 WebSocket 端点 (DeploymentLogs/ContainerLogs/DockerStats/Terminal/ServerTerminal)
+// Role: WebSocket 服务核心，提供实时日志流/容器统计/交互式终端等双向通信功能
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package ws
 
 import (

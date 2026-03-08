@@ -1,3 +1,7 @@
+// Input: docker-compose.yml 文件内容, appName, suffix 配置
+// Output: TransformComposeFile (添加前缀/后缀到 service name + 注入 dokploy-network)
+// Role: Compose 文件转换器，为 service 名添加唯一前缀防止命名冲突，注入 overlay 网络
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package compose
 
 import (

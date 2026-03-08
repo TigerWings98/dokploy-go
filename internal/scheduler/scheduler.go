@@ -1,3 +1,7 @@
+// Input: robfig/cron, db (Schedule/Backup 表), process (命令执行), docker (清理)
+// Output: Scheduler (AddJob/RemoveJob/RunNow), 支持备份/清理/自定义脚本三类定时任务
+// Role: Cron 定时任务调度器，管理备份定时任务、Docker 清理任务和自定义脚本执行
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package scheduler
 
 import (

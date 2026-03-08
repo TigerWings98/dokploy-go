@@ -1,3 +1,7 @@
+// Input: rclone CLI, Docker SDK (exec 恢复命令), S3 文件路径
+// Output: RestoreBackup (从 S3 下载+Docker exec 导入), ListS3Files (列出备份文件)
+// Role: 数据库备份恢复服务，从 S3 下载备份文件并通过 Docker exec 导入到数据库容器
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package backup
 
 import (

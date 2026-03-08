@@ -1,3 +1,7 @@
+// Input: db (Deployment 表), 文件系统 (部署日志文件)
+// Output: Deployment 列表/详情/日志读取/取消的 tRPC procedure 实现
+// Role: 部署记录管理 handler，查询部署历史和读取部署日志文件
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

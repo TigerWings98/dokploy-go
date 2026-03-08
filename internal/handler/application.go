@@ -1,3 +1,7 @@
+// Input: db (Application/Domain/Mount/Port/Deployment 表), docker, traefik, queue, service
+// Output: Application CRUD + 部署触发 + 域名/挂载/端口/环境变量管理的 tRPC procedure 实现
+// Role: 应用管理核心 handler，覆盖创建/更新/删除/部署/日志/统计等全部操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

@@ -1,3 +1,7 @@
+// Input: os/exec, context
+// Output: ExecAsync (异步命令执行+日志回调), ExecSync (同步命令执行), ExecCommand (简单执行)
+// Role: 本地命令执行引擎，为 Docker CLI/git/rclone 等外部命令提供统一的执行和日志采集接口
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package process
 
 import (

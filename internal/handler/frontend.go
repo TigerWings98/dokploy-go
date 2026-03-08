@@ -1,3 +1,7 @@
+// Input: 文件系统 (Next.js 静态文件) 或开发代理 (localhost:3000)
+// Output: 前端静态文件服务 + SPA 路由回退 + 开发模式反向代理
+// Role: 前端服务 handler，生产环境服务 Next.js 导出的静态文件，开发环境代理到 Next.js dev server
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

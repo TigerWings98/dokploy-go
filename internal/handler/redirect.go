@@ -1,3 +1,7 @@
+// Input: db (Redirect 表), traefik
+// Output: Redirect CRUD 的 tRPC procedure 实现
+// Role: URL 重定向规则管理 handler，同步更新 Traefik 配置
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

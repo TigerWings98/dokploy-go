@@ -1,3 +1,7 @@
+// Input: procedureRegistry, docker (Docker SDK 客户端)
+// Output: registerDockerTRPC - Docker 领域的 tRPC procedure 注册
+// Role: Docker tRPC 路由注册，将 docker.* procedure 绑定到容器/服务管理和系统清理操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

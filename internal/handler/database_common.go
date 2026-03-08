@@ -1,3 +1,7 @@
+// Input: db (Postgres/MySQL/MariaDB/Mongo/Redis 表), docker, service
+// Output: 数据库服务通用操作 (部署/停止/重建/删除) + 环境变量/挂载/端口共享逻辑
+// Role: 5 种数据库服务的共享 handler 逻辑，提取部署和管理操作的公共实现
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

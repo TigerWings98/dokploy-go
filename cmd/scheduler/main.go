@@ -1,3 +1,7 @@
+// Input: 环境变量配置, PostgreSQL, Redis
+// Output: Cron 定时任务服务
+// Role: 定时任务服务入口，管理备份/清理/自定义脚本等周期性任务
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package main
 
 import (

@@ -1,3 +1,7 @@
+// Input: db (Application/Compose/Database 表的 env 字段)
+// Output: 环境变量更新的 tRPC procedure 实现
+// Role: 环境变量管理 handler，更新 Application/Compose/Database 的 env 文本字段
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

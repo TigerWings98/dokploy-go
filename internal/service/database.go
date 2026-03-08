@@ -1,3 +1,7 @@
+// Input: db, docker, config
+// Output: DatabaseService (DeployDatabase 全流程: Docker Service 创建+环境变量+卷挂载)
+// Role: 数据库服务部署编排，为 Postgres/MySQL/MariaDB/Mongo/Redis 创建 Docker Swarm 服务
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package service
 
 import (

@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Project struct (含 name/description/organizationId)，关联 Application/Compose/Database 列表
+// Role: 项目容器数据表模型，作为 Application/Compose/数据库服务的顶层分组，归属于 Organization
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

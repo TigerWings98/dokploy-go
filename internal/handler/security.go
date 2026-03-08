@@ -1,3 +1,7 @@
+// Input: db (Security 表), traefik
+// Output: Security (Basic Auth) CRUD 的 tRPC procedure 实现
+// Role: 域名安全策略管理 handler，配置 Basic Auth 认证并同步 Traefik 中间件
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

@@ -1,3 +1,7 @@
+// Input: BuildType 枚举, 应用配置 (Dockerfile/buildArgs/publishDirectory 等)
+// Output: GenerateBuildCommand - 6 种构建类型的 Docker/Nixpacks/Buildpacks 命令生成
+// Role: 构建命令生成器，根据 BuildType 生成 nixpacks/dockerfile/heroku/paketo/railpack/static 构建命令
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package builder
 
 import (

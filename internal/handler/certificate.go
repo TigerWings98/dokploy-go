@@ -1,3 +1,7 @@
+// Input: db (Certificate 表), 文件系统 (证书文件读写)
+// Output: SSL 证书 CRUD 的 tRPC procedure 实现
+// Role: SSL 证书管理 handler，处理自定义证书的上传/存储/删除
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

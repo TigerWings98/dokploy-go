@@ -1,3 +1,7 @@
+// Input: db (Organization/Member/Invitation 表)
+// Output: Organization 成员管理/邀请/角色变更的 tRPC procedure 实现
+// Role: 组织管理 handler，处理成员邀请/移除/角色更新和组织信息查询
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

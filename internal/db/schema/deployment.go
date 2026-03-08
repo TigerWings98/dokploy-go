@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Deployment struct (含 status/logPath/applicationId/composeId 等字段)
+// Role: 部署记录数据表模型，记录每次应用/Compose 部署的状态、日志路径和错误信息
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

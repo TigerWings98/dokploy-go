@@ -1,3 +1,7 @@
+// Input: db, backup (卷备份操作)
+// Output: Volume Backup CRUD + 手动触发/恢复的 tRPC procedure 实现
+// Role: Docker 卷备份管理 handler，配置卷备份策略和 S3 上传/恢复
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

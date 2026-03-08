@@ -1,3 +1,7 @@
+// Input: db (Backup 表), backup (rclone S3 操作), scheduler (定时任务注册)
+// Output: Backup CRUD + 手动备份触发 + 定时任务管理的 tRPC procedure 实现
+// Role: 数据库备份管理 handler，配置备份策略并通过 rclone 执行 S3 上传
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

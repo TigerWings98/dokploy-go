@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Notification struct (含扁平化的多渠道通知字段：Slack/Telegram/Discord/Email/Gotify/Ntfy 等)
+// Role: 通知配置数据表模型，⚠️ 与 TS 版架构差异大（TS 用 11 个子表，Go 扁平化到主表）
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

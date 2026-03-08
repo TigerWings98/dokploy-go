@@ -1,3 +1,7 @@
+// Input: 事件数据 (应用名/状态/错误信息/时间)
+// Output: HTML 邮件模板 (BuildSuccess/BuildError/BackupSuccess/BackupError/DockerCleanup/ServerRestart)
+// Role: HTML 邮件模板生成器，为构建/备份/清理/重启等事件生成格式化的通知邮件
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package email
 
 import (

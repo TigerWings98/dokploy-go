@@ -1,3 +1,7 @@
+// Input: SMTP 配置 (server/port/username/password), 邮件内容 (to/subject/body)
+// Output: SendEmail (SMTP 邮件发送), SendHTMLEmail (HTML 格式邮件发送)
+// Role: SMTP 邮件发送器，支持纯文本和 HTML 格式邮件，用于通知渠道的邮件投递
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package email
 
 import (

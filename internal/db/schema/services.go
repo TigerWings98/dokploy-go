@@ -1,3 +1,7 @@
+// Input: gorm, go-nanoid
+// Output: Port struct (端口映射), LogDrain struct (日志转发)
+// Role: 端口映射和日志 Drain 数据表模型，关联 Application/Compose/PreviewDeployment
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package schema
 
 import (

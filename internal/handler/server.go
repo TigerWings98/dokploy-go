@@ -1,3 +1,7 @@
+// Input: db (Server 表), setup (远程服务器初始化), process/ssh
+// Output: Server CRUD + 远程设置/验证/Swarm 管理的 tRPC procedure 实现
+// Role: 远程服务器管理 handler，处理服务器注册/设置/状态检查/Swarm 集群管理
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

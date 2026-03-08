@@ -1,3 +1,7 @@
+// Input: Docker SDK (Swarm API)
+// Output: SwarmManager (GetSwarmInfo/GetJoinTokens/ListNodes/RemoveNode/LeaveSwarm/UpdateNodeAvailability)
+// Role: Docker Swarm 集群管理器，提供节点管理和集群状态查询操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package setup
 
 import (

@@ -1,3 +1,7 @@
+// Input: db (Domain 表), traefik (路由生成)
+// Output: Domain CRUD + Traefik 配置自动生成/清理的 tRPC procedure 实现
+// Role: 域名路由管理 handler，创建/更新/删除域名时自动同步 Traefik 动态配置文件
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

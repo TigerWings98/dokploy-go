@@ -1,3 +1,7 @@
+// Input: db, docker, git, builder, traefik, notify, config
+// Output: ApplicationService (DeployApplication 全流程: clone→build→service create→traefik config)
+// Role: 应用部署编排服务，实现完整的 CI/CD 流水线：Git 克隆 → 构建 → Docker Service 创建 → 路由配置
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package service
 
 import (

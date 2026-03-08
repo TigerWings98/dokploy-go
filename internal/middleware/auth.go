@@ -1,3 +1,7 @@
+// Input: auth (Session/APIKey 验证), echo
+// Output: AuthMiddleware, TRPCAuthMiddleware, AdminMiddleware, GetUser/GetSession/GetMember 辅助函数
+// Role: Echo 认证中间件，支持 Session/API Key 双通道认证，tRPC 格式错误响应，public procedure 白名单
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package middleware
 
 import (

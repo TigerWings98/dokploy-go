@@ -1,3 +1,7 @@
+// Input: db (SSHKey 表), crypto/ed25519
+// Output: SSH Key 生成/CRUD 的 tRPC procedure 实现
+// Role: SSH 密钥管理 handler，支持 Ed25519 密钥对生成和持久化
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (

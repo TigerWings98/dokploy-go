@@ -74,6 +74,9 @@ COPY --from=go-builder /out/api /app/api
 # Copy frontend static export
 COPY --from=frontend-builder /build/out /app/out
 
+# Copy Drizzle migration SQL files (与 TS 版共享同一套 migration)
+COPY dokploy/apps/dokploy/drizzle /app/drizzle
+
 # Create required directories
 RUN mkdir -p /etc/dokploy/{traefik/dynamic/certificates,logs,applications,compose,ssh,monitoring,registry,schedules,volume-backups,volume-backup-lock,patch-repos}
 

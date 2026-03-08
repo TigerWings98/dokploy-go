@@ -1,14 +1,36 @@
-// Input: GORM DB 实例, 全部 schema 模型
-// Output: IsAdminPresent 检查 + AutoMigrate 自动建表
-// Role: 数据库迁移管理，确保 Go 版可独立创建所有表结构（不依赖 TS 版 Drizzle 迁移）
+// Input: GORM DB 实例, 文件系统中的 Drizzle migration SQL 文件
+// Output: IsAdminPresent 检查 + AutoMigrate 幂等迁移（与 TS 版 Drizzle migrate() 行为一致）
+// Role: 数据库迁移管理，直接执行 Drizzle 原始 SQL，每次启动幂等执行，确保 Go↔TS 镜像可自由切换
 // 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package db
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 )
+
+// drizzleJournal 对应 Drizzle 的 _journal.json 格式
+type drizzleJournal struct {
+	Version string               `json:"version"`
+	Dialect string               `json:"dialect"`
+	Entries []drizzleJournalEntry `json:"entries"`
+}
+
+type drizzleJournalEntry struct {
+	Idx         int    `json:"idx"`
+	Version     string `json:"version"`
+	When        int64  `json:"when"`
+	Tag         string `json:"tag"`
+	Breakpoints bool   `json:"breakpoints"`
+}
 
 // IsAdminPresent checks if any admin/owner member exists in the database.
 func (d *DB) IsAdminPresent() bool {
@@ -17,136 +39,130 @@ func (d *DB) IsAdminPresent() bool {
 	return count > 0
 }
 
-// AutoMigrate creates or updates all database tables based on GORM model definitions.
-// 建表顺序：先创建无外键依赖的表，再创建有外键引用的表。
+// AutoMigrate 执行 Drizzle 原始 migration SQL，行为与 TS 版 drizzle-orm/migrate() 完全一致。
+// 每次启动都调用，幂等执行：
+//   - 读取 drizzle/__drizzle_migrations 记录表，获取最后执行的 migration 时间戳
+//   - 只执行 created_at > lastMigrationTimestamp 的新 migration
+//   - 全新数据库时执行所有 migration
+//   - 已全部执行过则直接跳过
+//
+// migration SQL 文件从 migrationsDir 目录读取（默认 ./drizzle），镜像中直接 COPY 即可。
 func (d *DB) AutoMigrate() error {
-	// 第一批：基础表（无外键依赖或仅自引用）
-	if err := d.DB.AutoMigrate(
-		// 用户/认证
-		&schema.User{},
-		&schema.Account{},
-		&schema.Verification{},
-		&schema.Session{},
-		&schema.TwoFactor{},
+	return d.AutoMigrateFrom("./drizzle")
+}
 
-		// 组织
-		&schema.Organization{},
-		&schema.Member{},
-		&schema.Invitation{},
-		&schema.APIKey{},
-
-		// SSH Key (被 Server/Application 等引用)
-		&schema.SSHKey{},
-
-		// 通知子表 (先于 notification 主表)
-		&schema.NotifSlack{},
-		&schema.NotifTelegram{},
-		&schema.NotifDiscord{},
-		&schema.NotifEmail{},
-		&schema.NotifResend{},
-		&schema.NotifGotify{},
-		&schema.NotifNtfy{},
-		&schema.NotifCustom{},
-		&schema.NotifLark{},
-		&schema.NotifPushover{},
-		&schema.NotifTeams{},
-
-		// Registry (被 Application 引用)
-		&schema.Registry{},
-
-		// Certificate
-		&schema.Certificate{},
-
-		// Destination (被 Backup 引用)
-		&schema.Destination{},
-
-		// Git Provider 子表 (先于 GitProvider 主表)
-		&schema.Github{},
-		&schema.Gitlab{},
-		&schema.Bitbucket{},
-		&schema.Gitea{},
-
-		// SSO
-		&schema.SSOProvider{},
-
-		// Settings
-		&schema.WebServerSettings{},
-	); err != nil {
-		return fmt.Errorf("failed to migrate base tables: %w", err)
+// AutoMigrateFrom 从指定目录执行 Drizzle migration。
+func (d *DB) AutoMigrateFrom(migrationsDir string) error {
+	// 读取 journal
+	journalPath := filepath.Join(migrationsDir, "meta", "_journal.json")
+	journalBytes, err := os.ReadFile(journalPath)
+	if err != nil {
+		return fmt.Errorf("failed to read migration journal %s: %w", journalPath, err)
 	}
 
-	// 第二批：有外键依赖的表
-	if err := d.DB.AutoMigrate(
-		// Server (depends on SSHKey)
-		&schema.Server{},
-
-		// Notification 主表 (depends on 11 sub-tables + Organization)
-		&schema.Notification{},
-
-		// Git Provider (depends on Github/Gitlab/Bitbucket/Gitea)
-		&schema.GitProvider{},
-
-		// Project (depends on Organization)
-		&schema.Project{},
-		&schema.Environment{},
-	); err != nil {
-		return fmt.Errorf("failed to migrate dependent tables: %w", err)
+	var journal drizzleJournal
+	if err := json.Unmarshal(journalBytes, &journal); err != nil {
+		return fmt.Errorf("failed to parse migration journal: %w", err)
 	}
 
-	// 第三批：业务实体表
-	if err := d.DB.AutoMigrate(
-		// Application (depends on Project, Server, Registry, GitProvider)
-		&schema.Application{},
+	// 按 idx 排序确保顺序
+	sort.Slice(journal.Entries, func(i, j int) bool {
+		return journal.Entries[i].Idx < journal.Entries[j].Idx
+	})
 
-		// Compose (depends on Project, Server, GitProvider)
-		&schema.Compose{},
-
-		// Database services (depends on Project, Server)
-		&schema.Postgres{},
-		&schema.MySQL{},
-		&schema.MariaDB{},
-		&schema.Mongo{},
-		&schema.Redis{},
-	); err != nil {
-		return fmt.Errorf("failed to migrate business tables: %w", err)
+	// 创建 drizzle schema 和 __drizzle_migrations 记录表（幂等）
+	if err := d.DB.Exec("CREATE SCHEMA IF NOT EXISTS drizzle").Error; err != nil {
+		return fmt.Errorf("failed to create drizzle schema: %w", err)
+	}
+	if err := d.DB.Exec(`CREATE TABLE IF NOT EXISTS drizzle."__drizzle_migrations" (
+		id SERIAL PRIMARY KEY,
+		hash text NOT NULL,
+		created_at bigint
+	)`).Error; err != nil {
+		return fmt.Errorf("failed to create drizzle migrations table: %w", err)
 	}
 
-	// 第四批：关联/子实体表
-	if err := d.DB.AutoMigrate(
-		// Domain (depends on Application/Compose/Server)
-		&schema.Domain{},
+	// 查询最后执行的 migration 时间戳（与 Drizzle 一致的逻辑）
+	var lastMigration struct {
+		CreatedAt *int64
+	}
+	d.DB.Raw(`SELECT created_at FROM drizzle."__drizzle_migrations" ORDER BY created_at DESC LIMIT 1`).Scan(&lastMigration)
 
-		// Deployment (depends on Application/Compose)
-		&schema.Deployment{},
-
-		// Mount (depends on Application/Compose/databases)
-		&schema.Mount{},
-
-		// Port (depends on Application/databases)
-		&schema.Port{},
-
-		// Security (depends on Application/Compose)
-		&schema.Security{},
-
-		// Redirect (depends on Application/Compose)
-		&schema.Redirect{},
-
-		// Backup (depends on Destination + databases)
-		&schema.Backup{},
-		&schema.VolumeBackup{},
-
-		// Preview Deployment (depends on Application)
-		&schema.PreviewDeployment{},
-
-		// Rollback/Schedule
-		&schema.Rollback{},
-		&schema.Schedule{},
-
-		// Patch
-		&schema.Patch{},
-	); err != nil {
-		return fmt.Errorf("failed to migrate relation tables: %w", err)
+	var lastTimestamp int64
+	if lastMigration.CreatedAt != nil {
+		lastTimestamp = *lastMigration.CreatedAt
 	}
 
+	// 过滤出需要执行的 migration
+	var pending []drizzleJournalEntry
+	for _, entry := range journal.Entries {
+		if entry.When > lastTimestamp {
+			pending = append(pending, entry)
+		}
+	}
+
+	if len(pending) == 0 {
+		log.Println("All migrations already applied, nothing to do")
+		return nil
+	}
+
+	log.Printf("Found %d pending migration(s) to apply (total: %d)", len(pending), len(journal.Entries))
+
+	// 在事务中执行所有 pending migration
+	tx := d.DB.Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
+
+	for _, entry := range pending {
+		// 从文件系统读取 SQL
+		sqlPath := filepath.Join(migrationsDir, entry.Tag+".sql")
+		sqlBytes, err := os.ReadFile(sqlPath)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to read migration file %s: %w", sqlPath, err)
+		}
+
+		// 计算 hash（与 Drizzle 一致：SHA256 of 整个文件内容）
+		hash := fmt.Sprintf("%x", sha256.Sum256(sqlBytes))
+
+		// 按 --> statement-breakpoint 分割并逐条执行
+		statements := strings.Split(string(sqlBytes), "--> statement-breakpoint")
+		for _, stmt := range statements {
+			stmt = strings.TrimSpace(stmt)
+			if stmt == "" {
+				continue
+			}
+			if err := tx.Exec(stmt).Error; err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %s failed: %w\nSQL: %s", entry.Tag, err, truncateSQL(stmt))
+			}
+		}
+
+		// 记录到 drizzle.__drizzle_migrations（与 Drizzle 写入逻辑一致）
+		if err := tx.Exec(
+			`INSERT INTO drizzle."__drizzle_migrations" ("hash", "created_at") VALUES (?, ?)`,
+			hash, entry.When,
+		).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to record migration %s: %w", entry.Tag, err)
+		}
+
+		log.Printf("Applied migration: %s", entry.Tag)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("failed to commit migrations: %w", err)
+	}
+
+	log.Printf("Successfully applied %d migration(s)", len(pending))
 	return nil
+}
+
+// truncateSQL 截断 SQL 用于错误日志，避免日志过长
+func truncateSQL(sql string) string {
+	if len(sql) > 200 {
+		return sql[:200] + "..."
+	}
+	return sql
 }

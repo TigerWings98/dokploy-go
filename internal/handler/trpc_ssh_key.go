@@ -7,8 +7,10 @@ package handler
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"encoding/pem"
+	"crypto/x509"
 	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -65,39 +67,53 @@ func (h *Handler) registerSSHKeyTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	// sshKey.generate: 仅生成密钥对并返回，不保存到数据库
+	// 与 TS 版一致：前端拿到 privateKey/publicKey 填入表单，用户点保存时走 sshKey.create
 	r["sshKey.generate"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		member, err := h.getDefaultMember(c)
-		if err != nil {
-			return nil, err
-		}
 		var in struct {
-			Name string `json:"name"`
+			Type string `json:"type"` // "rsa" 或 "ed25519"
 		}
 		json.Unmarshal(input, &in)
 
-		pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, &trpcErr{"Failed to generate key: " + err.Error(), "INTERNAL_SERVER_ERROR", 500}
+		var pubKeyStr, privKeyStr string
+
+		switch in.Type {
+		case "rsa":
+			// 生成 4096 位 RSA 密钥（与 TS 版 ssh2 默认一致）
+			rsaKey, err := rsa.GenerateKey(rand.Reader, 4096)
+			if err != nil {
+				return nil, &trpcErr{"Failed to generate RSA key: " + err.Error(), "INTERNAL_SERVER_ERROR", 500}
+			}
+			sshPub, err := ssh.NewPublicKey(&rsaKey.PublicKey)
+			if err != nil {
+				return nil, &trpcErr{"Failed to convert public key: " + err.Error(), "INTERNAL_SERVER_ERROR", 500}
+			}
+			pubKeyStr = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
+			privPEM := pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+			})
+			privKeyStr = string(privPEM)
+
+		default:
+			// 默认 ed25519（与 TS 版默认一致）
+			pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				return nil, &trpcErr{"Failed to generate ED25519 key: " + err.Error(), "INTERNAL_SERVER_ERROR", 500}
+			}
+			sshPub, err := ssh.NewPublicKey(pubKey)
+			if err != nil {
+				return nil, &trpcErr{"Failed to convert public key: " + err.Error(), "INTERNAL_SERVER_ERROR", 500}
+			}
+			pubKeyStr = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
+			privKeyStr = string(marshalED25519PrivateKey(privKey))
 		}
 
-		sshPub, err := ssh.NewPublicKey(pubKey)
-		if err != nil {
-			return nil, &trpcErr{"Failed to convert public key: " + err.Error(), "INTERNAL_SERVER_ERROR", 500}
-		}
-		pubKeyStr := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
-
-		privKeyPEM := marshalED25519PrivateKey(privKey)
-
-		key := schema.SSHKey{
-			Name:           in.Name,
-			PublicKey:      pubKeyStr,
-			PrivateKey:     string(privKeyPEM),
-			OrganizationID: member.OrganizationID,
-		}
-		if err := h.DB.Create(&key).Error; err != nil {
-			return nil, err
-		}
-		return key, nil
+		// 只返回密钥对，不保存到数据库
+		return map[string]string{
+			"privateKey": privKeyStr,
+			"publicKey":  pubKeyStr,
+		}, nil
 	}
 
 	r["sshKey.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

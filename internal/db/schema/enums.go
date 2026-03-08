@@ -151,18 +151,17 @@ const (
 type NotificationType string
 
 const (
-	NotificationTypeSlack     NotificationType = "slack"
-	NotificationTypeTelegram  NotificationType = "telegram"
-	NotificationTypeDiscord   NotificationType = "discord"
-	NotificationTypeEmail     NotificationType = "email"
-	NotificationTypeGotify    NotificationType = "gotify"
-	NotificationTypeNtfy      NotificationType = "ntfy"
-	NotificationTypePushover  NotificationType = "pushover"
-	NotificationTypeWebhook   NotificationType = "webhook"
-	NotificationTypeDingtalk  NotificationType = "dingtalk"
-	NotificationTypeFeishu    NotificationType = "feishu"
-	NotificationTypeMatrix    NotificationType = "matrix"
-	NotificationTypeMattermost NotificationType = "mattermost"
+	NotificationTypeSlack    NotificationType = "slack"
+	NotificationTypeTelegram NotificationType = "telegram"
+	NotificationTypeDiscord  NotificationType = "discord"
+	NotificationTypeEmail    NotificationType = "email"
+	NotificationTypeResend   NotificationType = "resend"
+	NotificationTypeGotify   NotificationType = "gotify"
+	NotificationTypeNtfy     NotificationType = "ntfy"
+	NotificationTypePushover NotificationType = "pushover"
+	NotificationTypeCustom   NotificationType = "custom"
+	NotificationTypeLark     NotificationType = "lark"
+	NotificationTypeTeams    NotificationType = "teams"
 )
 
 // MemberRole represents a member's role in an organization.

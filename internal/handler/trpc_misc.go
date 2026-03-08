@@ -455,7 +455,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 	}
 
 	// ===== CERTIFICATE =====
-	r["certificates.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificate.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := h.getDefaultMember(c)
 		if err != nil {
 			return nil, err
@@ -468,7 +468,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return certs, nil
 	}
 
-	r["certificates.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificate.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			CertificateID string `json:"certificateId"`
 		}
@@ -480,7 +480,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return cert, nil
 	}
 
-	r["certificates.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificate.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		member, err := h.getDefaultMember(c)
 		if err != nil {
 			return nil, err
@@ -494,7 +494,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return cert, nil
 	}
 
-	r["certificates.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+	r["certificate.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			CertificateID string `json:"certificateId"`
 		}
@@ -595,9 +595,4 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	// Certificate name aliases (TS uses singular "certificate", Go uses "certificates")
-	r["certificate.all"] = r["certificates.all"]
-	r["certificate.one"] = r["certificates.one"]
-	r["certificate.create"] = r["certificates.create"]
-	r["certificate.remove"] = r["certificates.remove"]
 }

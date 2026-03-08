@@ -174,6 +174,7 @@ func main() {
 		handler.WithBackupService(backupSvc),
 		handler.WithPreviewService(previewSvc),
 		handler.WithComposeService(composeSvc),
+		handler.WithApplicationService(appSvc),
 	)
 	h.RegisterRoutes(e)
 

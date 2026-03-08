@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dokploy/dokploy/internal/auth"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
 	"github.com/labstack/echo/v4"
@@ -239,10 +240,12 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		prefix := "dk_"
 		start := key[:4]
 		fullKey := prefix + key
+		// 存储哈希后的 key（与 Better Auth defaultKeyHasher 一致：SHA-256 + base64url）
+		hashedKey := auth.HashAPIKey(fullKey)
 
 		apiKey := schema.APIKey{
 			UserID:      user.ID,
-			Key:         fullKey,
+			Key:         hashedKey,
 			Name:        &in.Name,
 			Prefix:      &prefix,
 			Start:       &start,

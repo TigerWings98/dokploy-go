@@ -165,12 +165,12 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 
 	r["application.redeploy"] = r["application.deploy"]
 
+	// stop/start 是同步操作（与 TS 版一致），不走队列
 	r["application.stop"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ApplicationID string `json:"applicationId"` }
 		json.Unmarshal(input, &in)
-		if h.Queue != nil {
-			_, err := h.Queue.EnqueueStopApplication(in.ApplicationID)
-			if err != nil {
+		if h.AppSvc != nil {
+			if err := h.AppSvc.Stop(in.ApplicationID); err != nil {
 				return nil, err
 			}
 		}
@@ -180,9 +180,8 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 	r["application.start"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ ApplicationID string `json:"applicationId"` }
 		json.Unmarshal(input, &in)
-		if h.Queue != nil {
-			_, err := h.Queue.EnqueueStartApplication(in.ApplicationID)
-			if err != nil {
+		if h.AppSvc != nil {
+			if err := h.AppSvc.Start(in.ApplicationID); err != nil {
 				return nil, err
 			}
 		}

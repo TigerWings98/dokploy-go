@@ -356,6 +356,8 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		if err := h.DB.Create(&d).Error; err != nil {
 			return nil, err
 		}
+		// 同步 Traefik 配置（与 TS 版 manageDomain 一致）
+		h.generateTraefikForDomain(&d)
 		return d, nil
 	}
 
@@ -364,7 +366,31 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 			DomainID string `json:"domainId"`
 		}
 		json.Unmarshal(input, &in)
+
+		// 先读取 domain 信息用于 Traefik 清理
+		var domain schema.Domain
+		if err := h.DB.First(&domain, "\"domainId\" = ?", in.DomainID).Error; err != nil {
+			return nil, &trpcErr{"Domain not found", "NOT_FOUND", 404}
+		}
+		appName := h.resolveAppName(&domain)
+
 		h.DB.Delete(&schema.Domain{}, "\"domainId\" = ?", in.DomainID)
+
+		// 删除后同步 Traefik 配置（与 TS 版 removeDomain 一致）
+		if h.Traefik != nil && appName != "" {
+			var count int64
+			if domain.ApplicationID != nil {
+				h.DB.Model(&schema.Domain{}).Where("\"applicationId\" = ?", *domain.ApplicationID).Count(&count)
+			} else if domain.ComposeID != nil {
+				h.DB.Model(&schema.Domain{}).Where("\"composeId\" = ?", *domain.ComposeID).Count(&count)
+			}
+			if count == 0 {
+				h.Traefik.RemoveApplicationConfig(appName)
+			} else {
+				// 还有其他域名，重新生成配置
+				h.regenerateTraefikForApp(appName, domain.ApplicationID, domain.ComposeID)
+			}
+		}
 		return true, nil
 	}
 
@@ -374,6 +400,12 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		id, _ := in["domainId"].(string)
 		delete(in, "domainId")
 		h.DB.Model(&schema.Domain{}).Where("\"domainId\" = ?", id).Updates(in)
+
+		// 更新后重新生成 Traefik 配置（与 TS 版 manageDomain 一致）
+		var domain schema.Domain
+		if err := h.DB.First(&domain, "\"domainId\" = ?", id).Error; err == nil {
+			h.generateTraefikForDomain(&domain)
+		}
 		return true, nil
 	}
 

@@ -32,6 +32,7 @@ type Handler struct {
 	BackupSvc  *backup.Service
 	PreviewSvc *service.PreviewService
 	ComposeSvc *service.ComposeService
+	AppSvc     *service.ApplicationService
 	CertsPath  string
 }
 
@@ -95,6 +96,11 @@ func WithPreviewService(s *service.PreviewService) HandlerOption {
 // WithComposeService sets the compose service.
 func WithComposeService(s *service.ComposeService) HandlerOption {
 	return func(h *Handler) { h.ComposeSvc = s }
+}
+
+// WithApplicationService sets the application service.
+func WithApplicationService(s *service.ApplicationService) HandlerOption {
+	return func(h *Handler) { h.AppSvc = s }
 }
 
 // RegisterRoutes registers all API routes.

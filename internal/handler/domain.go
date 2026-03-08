@@ -162,6 +162,23 @@ func (h *Handler) generateTraefikForDomain(domain *schema.Domain) {
 	}
 }
 
+// regenerateTraefikForApp 重新生成指定应用/compose 的所有域名 Traefik 配置。
+// 用于删除单个域名后，确保剩余域名的路由仍然正确。
+func (h *Handler) regenerateTraefikForApp(appName string, applicationID, composeID *string) {
+	if h.Traefik == nil {
+		return
+	}
+	var domains []schema.Domain
+	if applicationID != nil {
+		h.DB.Where("\"applicationId\" = ?", *applicationID).Find(&domains)
+	} else if composeID != nil {
+		h.DB.Where("\"composeId\" = ?", *composeID).Find(&domains)
+	}
+	for i := range domains {
+		h.generateTraefikForDomain(&domains[i])
+	}
+}
+
 // resolveAppName finds the appName from the domain's associated application or compose.
 func (h *Handler) resolveAppName(domain *schema.Domain) string {
 	if domain.ApplicationID != nil {

@@ -342,7 +342,7 @@ func (s *ApplicationService) Start(appID string) error {
 		return err
 	}
 
-	s.updateStatus(appID, schema.ApplicationStatusRunning)
+	s.updateStatus(appID, schema.ApplicationStatusDone)
 	return nil
 }
 

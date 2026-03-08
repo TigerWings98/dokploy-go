@@ -435,11 +435,7 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.getOpenApiDocument"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{
-			"openapi": "3.0.0",
-			"info":    map[string]string{"title": "Dokploy API", "version": "1.0.0"},
-			"paths":   map[string]interface{}{},
-		}, nil
+		return h.GenerateOpenAPIDocument(), nil
 	}
 
 	r["settings.cleanDockerPrune"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

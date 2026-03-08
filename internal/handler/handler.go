@@ -204,6 +204,13 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	trpc.Use(mw.TRPCAuthMiddleware(h.Auth, "settings.health", "sso.showSignInWithSSO", "compose.templates"))
 	trpc.Any("/:procedures", h.HandleTRPC)
 
+	// OpenAPI REST 兼容层（与 TS 版 @dokploy/trpc-openapi 行为一致）
+	// 暴露 /api/{router}.{procedure} 格式的 REST 端点，供 Swagger/外部脚本/GitHub Actions 调用
+	// 认证方式：x-api-key header 或 session cookie
+	openapi := e.Group("/api")
+	openapi.Use(mw.AuthMiddleware(h.Auth))
+	openapi.Any("/*", h.HandleOpenAPI)
+
 	// Webhook routes (public, no auth)
 	h.registerWebhookRoutes(e)
 }

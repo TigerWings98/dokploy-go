@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
-import { LicenseKeySettings } from "@/components/proprietary/license-keys/license-key";
+import { LicenseKeySettings } from "@/components/custom/license-settings";
 import { Card } from "@/components/ui/card";
 
 const Page = () => {

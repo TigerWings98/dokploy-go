@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (Project 表)
+// Output: registerProjectTRPC - Project 领域的 tRPC procedure 注册
+// Role: Project tRPC 路由注册，将 project.* procedure 绑定到项目 CRUD 操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (
@@ -399,5 +403,61 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		h.DB.Delete(&schema.Environment{}, "\"environmentId\" = ?", in.EnvironmentID)
 		return true, nil
+	}
+
+	// === environment.search ===
+	r["environment.search"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		var in struct {
+			Q           *string `json:"q"`
+			Name        *string `json:"name"`
+			Description *string `json:"description"`
+			ProjectID   *string `json:"projectId"`
+			Limit       int     `json:"limit"`
+			Offset      int     `json:"offset"`
+		}
+		json.Unmarshal(input, &in)
+		if in.Limit <= 0 {
+			in.Limit = 20
+		}
+		if in.Limit > 100 {
+			in.Limit = 100
+		}
+
+		query := h.DB.Table("environment").
+			Joins("JOIN project ON environment.\"projectId\" = project.\"projectId\"").
+			Where("project.\"organizationId\" = ?", member.OrganizationID)
+
+		if in.ProjectID != nil && *in.ProjectID != "" {
+			query = query.Where("environment.\"projectId\" = ?", *in.ProjectID)
+		}
+		if in.Q != nil && *in.Q != "" {
+			term := "%" + *in.Q + "%"
+			query = query.Where("(environment.name ILIKE ? OR environment.description ILIKE ?)", term, term)
+		}
+		if in.Name != nil && *in.Name != "" {
+			query = query.Where("environment.name ILIKE ?", "%"+*in.Name+"%")
+		}
+		if in.Description != nil && *in.Description != "" {
+			query = query.Where("environment.description ILIKE ?", "%"+*in.Description+"%")
+		}
+
+		var total int64
+		query.Count(&total)
+
+		var items []schema.Environment
+		query.Offset(in.Offset).Limit(in.Limit).Order("environment.\"createdAt\" DESC").
+			Select("environment.*").Find(&items)
+		if items == nil {
+			items = []schema.Environment{}
+		}
+
+		return map[string]interface{}{
+			"items": items,
+			"total": total,
+		}, nil
 	}
 }

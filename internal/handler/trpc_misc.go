@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (各类表), config
+// Output: registerMiscTRPC - 杂项领域 tRPC procedure 注册 (domain/redirect/security/port/mount/environment/certificate/registry/logDrain)
+// Role: 杂项 tRPC 路由注册，将非核心领域的 CRUD procedure 集中注册
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (
@@ -8,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -136,6 +141,53 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		delete(in, "mountId")
 		h.DB.Model(&schema.Mount{}).Where("\"mountId\" = ?", id).Updates(in)
 		return true, nil
+	}
+
+	// allNamedByApplicationId - returns Docker volume mounts for an application container
+	r["mounts.allNamedByApplicationId"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ApplicationID string `json:"applicationId"`
+		}
+		json.Unmarshal(input, &in)
+
+		var app schema.Application
+		if err := h.DB.First(&app, "\"applicationId\" = ?", in.ApplicationID).Error; err != nil {
+			return nil, &trpcErr{"Application not found", "NOT_FOUND", 404}
+		}
+
+		if h.Docker == nil {
+			return []interface{}{}, nil
+		}
+
+		containers, err := h.Docker.DockerClient().ContainerList(c.Request().Context(), containertypes.ListOptions{
+			Filters: filtersFromStrings([]string{"name=" + app.AppName}),
+		})
+		if err != nil || len(containers) == 0 {
+			return []interface{}{}, nil
+		}
+
+		inspect, err := h.Docker.DockerClient().ContainerInspect(c.Request().Context(), containers[0].ID)
+		if err != nil {
+			return []interface{}{}, nil
+		}
+
+		var result []map[string]interface{}
+		for _, m := range inspect.Mounts {
+			if m.Type == "volume" && m.Name != "" {
+				result = append(result, map[string]interface{}{
+					"Type":        string(m.Type),
+					"Name":        m.Name,
+					"Source":      m.Source,
+					"Destination": m.Destination,
+					"Driver":      m.Driver,
+					"RW":          m.RW,
+				})
+			}
+		}
+		if result == nil {
+			result = []map[string]interface{}{}
+		}
+		return result, nil
 	}
 
 	r["mounts.listByServiceId"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -527,4 +579,25 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 	}
 	r["registry.testConnection"] = testRegistryByID
 	r["registry.testRegistryById"] = testRegistryByID
+	r["registry.testRegistry"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			RegistryURL string  `json:"registryUrl"`
+			Username    string  `json:"username"`
+			Password    string  `json:"password"`
+			ServerID    *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		if h.Docker != nil {
+			if err := h.Docker.TestRegistryLogin(c.Request().Context(), in.RegistryURL, in.Username, in.Password); err != nil {
+				return nil, &trpcErr{"Registry connection failed: " + err.Error(), "BAD_REQUEST", 400}
+			}
+		}
+		return true, nil
+	}
+
+	// Certificate name aliases (TS uses singular "certificate", Go uses "certificates")
+	r["certificate.all"] = r["certificates.all"]
+	r["certificate.one"] = r["certificates.one"]
+	r["certificate.create"] = r["certificates.create"]
+	r["certificate.remove"] = r["certificates.remove"]
 }

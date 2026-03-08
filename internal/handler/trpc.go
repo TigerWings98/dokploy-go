@@ -1,3 +1,7 @@
+// Input: echo, encoding/json
+// Output: tRPC 协议处理引擎 (HandleTRPC/HandleTRPCMutation/HandleTRPCBatch)
+// Role: tRPC 兼容层核心，解析 query/mutation/batch 请求，路由到注册的 procedure handler
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (
@@ -47,8 +51,15 @@ type TRPCErrorInfo struct {
 // ProcedureFunc handles a tRPC procedure call.
 type ProcedureFunc func(c echo.Context, input json.RawMessage) (interface{}, error)
 
+// SubscriptionFunc handles a tRPC subscription (SSE streaming).
+// It receives a channel to send data events; close the channel when done.
+type SubscriptionFunc func(c echo.Context, input json.RawMessage, emit chan<- interface{})
+
 // procedureRegistry maps "router.procedure" to handler functions.
 type procedureRegistry map[string]ProcedureFunc
+
+// subscriptionRegistry maps "router.procedure" to subscription handler functions.
+type subscriptionRegistry map[string]SubscriptionFunc
 
 // trpcErr is a typed error for tRPC responses.
 type trpcErr struct {
@@ -82,6 +93,12 @@ func (h *Handler) HandleTRPC(c echo.Context) error {
 	input, err := h.extractInput(c, "")
 	if err != nil {
 		return h.trpcError(c, err.Error(), "BAD_REQUEST", http.StatusBadRequest)
+	}
+
+	// Check if this is a subscription request
+	subs := h.buildSubscriptionRegistry()
+	if subFn, ok := subs[procNames[0]]; ok {
+		return h.handleSSESubscription(c, procNames[0], input, subFn)
 	}
 
 	result, err := h.callProcedure(c, procNames[0], input)
@@ -227,4 +244,81 @@ func (h *Handler) buildErrorResult(err error) interface{} {
 			Data:    &TRPCErrorInfo{Code: code, HTTPStatus: status},
 		},
 	}
+}
+
+// handleSSESubscription handles tRPC subscription procedures via Server-Sent Events.
+func (h *Handler) handleSSESubscription(c echo.Context, name string, input json.RawMessage, subFn SubscriptionFunc) error {
+	w := c.Response()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	emit := make(chan interface{}, 64)
+	go subFn(c, input, emit)
+
+	flusher, _ := w.Writer.(http.Flusher)
+	id := 1
+
+	// Send connected event
+	connEvent := map[string]interface{}{
+		"id":      id,
+		"jsonrpc": "2.0",
+		"result": map[string]interface{}{
+			"type": "started",
+		},
+	}
+	connData, _ := json.Marshal(connEvent)
+	fmt.Fprintf(w, "id: %d\ndata: %s\n\n", id, connData)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	id++
+
+	ctx := c.Request().Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case data, ok := <-emit:
+			if !ok {
+				// Channel closed, send stopped event
+				stopEvent := map[string]interface{}{
+					"id":      id,
+					"jsonrpc": "2.0",
+					"result": map[string]interface{}{
+						"type": "stopped",
+					},
+				}
+				stopData, _ := json.Marshal(stopEvent)
+				fmt.Fprintf(w, "id: %d\ndata: %s\n\n", id, stopData)
+				if flusher != nil {
+					flusher.Flush()
+				}
+				return nil
+			}
+			event := map[string]interface{}{
+				"id":      id,
+				"jsonrpc": "2.0",
+				"result": map[string]interface{}{
+					"type": "data",
+					"data": data,
+				},
+			}
+			eventData, _ := json.Marshal(event)
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", id, eventData)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			id++
+		}
+	}
+}
+
+// buildSubscriptionRegistry creates the subscription procedure registry.
+func (h *Handler) buildSubscriptionRegistry() subscriptionRegistry {
+	s := make(subscriptionRegistry)
+	h.registerSubscriptionsTRPC(s)
+	return s
 }

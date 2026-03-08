@@ -1,3 +1,7 @@
+// Input: procedureRegistry, db (Notification 表), notify
+// Output: registerNotificationTRPC - Notification 领域的 tRPC procedure 注册
+// Role: Notification tRPC 路由注册，将 notification.* procedure 绑定到通知配置管理操作
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (
@@ -7,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/labstack/echo/v4"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 )
@@ -177,6 +182,42 @@ func (h *Handler) registerNotificationTRPC(r procedureRegistry) {
 			notifs = []map[string]interface{}{}
 		}
 		return notifs, nil
+	}
+
+	// receiveNotification - receives monitoring alerts and dispatches notifications
+	r["notification.receiveNotification"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerType string  `json:"ServerType"`
+			Type       string  `json:"Type"`
+			Value      float64 `json:"Value"`
+			Threshold  float64 `json:"Threshold"`
+			Message    string  `json:"Message"`
+			Timestamp  string  `json:"Timestamp"`
+			Token      string  `json:"Token"`
+		}
+		json.Unmarshal(input, &in)
+
+		if h.Notifier != nil {
+			msg := fmt.Sprintf("[%s] %s alert: %.1f%% (threshold: %.1f%%)\n%s",
+				in.ServerType, in.Type, in.Value, in.Threshold, in.Message)
+
+			// Get all organization IDs that have serverThreshold notifications
+			var orgIDs []string
+			h.DB.Table("notification").
+				Where("\"serverThreshold\" = ?", true).
+				Distinct("\"organizationId\"").
+				Pluck("\"organizationId\"", &orgIDs)
+
+			for _, orgID := range orgIDs {
+				h.Notifier.Send(orgID, notify.NotificationPayload{
+					Event:   notify.EventDokployRestart,
+					Title:   "Server Alert",
+					Message: msg,
+				})
+			}
+		}
+
+		return true, nil
 	}
 
 	r["notification.getEmailProviders"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

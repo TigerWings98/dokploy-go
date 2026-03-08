@@ -1,3 +1,7 @@
+// Input: echo, encoding/json, schema
+// Output: Stub procedure 实现 (Stripe/AI/LicenseKey/Cluster/Swarm 企业功能)
+// Role: 企业功能 stub 层，为自托管模式提供无操作的 tRPC procedure 响应，避免前端报错
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (
@@ -27,6 +31,9 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 	}
 	r["stripe.upgradeSubscription"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		return nil, &trpcErr{"Not available in self-hosted mode", "BAD_REQUEST", 400}
+	}
+	r["stripe.getCurrentPlan"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return nil, nil // self-hosted: no subscription plan
 	}
 
 	// Auth

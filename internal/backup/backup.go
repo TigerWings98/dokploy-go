@@ -1,3 +1,7 @@
+// Input: db (Backup/Destination 表), rclone CLI, Docker SDK (exec 备份命令)
+// Output: Service (RunBackup/ScheduleBackup/CancelBackup/ListBackupFiles)
+// Role: 数据库备份服务，通过 Docker exec 导出数据 + rclone 上传到 S3 兼容存储
+// 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package backup
 
 import (
@@ -295,5 +299,76 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 	}
 
 	os.Remove(backupPath)
+	return nil
+}
+
+// RestoreVolumeBackup downloads a volume backup from S3 and restores it to the Docker volume.
+func (s *Service) RestoreVolumeBackup(volumeBackupID string, filename string) error {
+	var vb schema.VolumeBackup
+	if err := s.db.
+		Preload("Destination").
+		Preload("Application").
+		Preload("Application.Server").
+		Preload("Application.Server.SSHKey").
+		Preload("Compose").
+		Preload("Compose.Server").
+		Preload("Compose.Server.SSHKey").
+		First(&vb, "\"volumeBackupId\" = ?", volumeBackupID).Error; err != nil {
+		return fmt.Errorf("volume backup not found: %w", err)
+	}
+
+	if vb.Destination == nil {
+		return fmt.Errorf("volume backup destination not configured")
+	}
+
+	dest := vb.Destination
+	tmpDir := "/tmp/dokploy-volume-restores"
+	os.MkdirAll(tmpDir, 0755)
+	localPath := filepath.Join(tmpDir, filename)
+	defer os.Remove(localPath)
+
+	rcloneEnv := fmt.Sprintf(
+		"RCLONE_CONFIG_S3_TYPE=s3 RCLONE_CONFIG_S3_PROVIDER=Other "+
+			"RCLONE_CONFIG_S3_ACCESS_KEY_ID=%s RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=%s "+
+			"RCLONE_CONFIG_S3_REGION=%s RCLONE_CONFIG_S3_ENDPOINT=%s",
+		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
+	)
+
+	downloadCmd := fmt.Sprintf("%s rclone copy s3:%s/%s/%s %s",
+		rcloneEnv, dest.Bucket, vb.AppName, filename, tmpDir)
+
+	if _, err := process.ExecAsync(downloadCmd); err != nil {
+		return fmt.Errorf("failed to download volume backup: %w", err)
+	}
+
+	// Restore the tar file into the Docker volume
+	restoreCmd := fmt.Sprintf(
+		"docker run --rm -v %s:/volume -v %s:/backup alpine sh -c 'rm -rf /volume/* && tar xf /backup/%s -C /volume'",
+		vb.VolumeName, tmpDir, filename,
+	)
+
+	var server *schema.Server
+	if vb.Application != nil && vb.Application.Server != nil {
+		server = vb.Application.Server
+	} else if vb.Compose != nil && vb.Compose.Server != nil {
+		server = vb.Compose.Server
+	}
+
+	if server != nil && server.SSHKey != nil {
+		conn := process.SSHConnection{
+			Host:       server.IPAddress,
+			Port:       server.Port,
+			Username:   server.Username,
+			PrivateKey: server.SSHKey.PrivateKey,
+		}
+		if _, err := process.ExecAsyncRemote(conn, restoreCmd, nil); err != nil {
+			return fmt.Errorf("failed to restore volume backup: %w", err)
+		}
+	} else {
+		if _, err := process.ExecAsync(restoreCmd); err != nil {
+			return fmt.Errorf("failed to restore volume backup: %w", err)
+		}
+	}
+
 	return nil
 }

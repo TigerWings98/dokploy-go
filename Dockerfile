@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ============================================================
 # Stage 1: Build Go binaries
 # ============================================================
@@ -51,20 +49,21 @@ RUN apk add --no-cache \
     unzip \
     rclone
 
-# Install Nixpacks
-RUN curl -sSL https://nixpacks.com/install.sh | bash
+# Install Nixpacks (cross-compile safe, manual download)
+ARG TARGETARCH
+ARG NIXPACKS_VERSION=v1.41.0
+RUN if [ "$TARGETARCH" = "arm64" ]; then NARCH="aarch64"; else NARCH="x86_64"; fi && \
+    curl -sSL "https://github.com/railwayapp/nixpacks/releases/download/${NIXPACKS_VERSION}/nixpacks-${NIXPACKS_VERSION}-${NARCH}-unknown-linux-musl.tar.gz" \
+    | tar -xz -C /usr/local/bin
 
-# Install Railpack
-RUN curl -sSL https://railpack.com/install.sh | bash
+# Install Railpack (cross-compile safe, manual download)
+ARG RAILPACK_VERSION=v0.17.2
+RUN if [ "$TARGETARCH" = "arm64" ]; then RARCH="arm64"; else RARCH="x86_64"; fi && \
+    curl -sSL "https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${RARCH}-unknown-linux-musl.tar.gz" \
+    | tar -xz -C /usr/local/bin
 
-# Install Pack CLI (buildpacks) - detect architecture
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-        PACK_ARCH="arm64"; \
-    else \
-        PACK_ARCH="amd64"; \
-    fi && \
-    curl -sSL "https://github.com/buildpacks/pack/releases/download/v0.39.1/pack-v0.39.1-linux-${PACK_ARCH}.tgz" | tar -xz -C /usr/local/bin
+# Install Pack CLI (multi-arch: COPY from official image, same as upstream Dokploy)
+COPY --from=buildpacksio/pack:0.39.1 /usr/local/bin/pack /usr/local/bin/pack
 
 # Copy Go binaries
 COPY --from=go-builder /out/server /app/server

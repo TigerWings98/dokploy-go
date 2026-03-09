@@ -52,12 +52,14 @@ type Backup struct {
 	MySQLID       *string      `gorm:"column:mysqlId;type:text" json:"mysqlId"`
 	MariaDBID     *string      `gorm:"column:mariadbId;type:text" json:"mariadbId"`
 	MongoID       *string      `gorm:"column:mongoId;type:text" json:"mongoId"`
+	RedisID       *string      `gorm:"column:redisId;type:text" json:"redisId"`
 
 	Destination *Destination `gorm:"foreignKey:DestinationID" json:"destination,omitempty"`
 	Postgres    *Postgres    `gorm:"foreignKey:PostgresID" json:"postgres,omitempty"`
 	MySQL       *MySQL       `gorm:"foreignKey:MySQLID" json:"mysql,omitempty"`
 	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID" json:"mariadb,omitempty"`
 	Mongo       *Mongo       `gorm:"foreignKey:MongoID" json:"mongo,omitempty"`
+	Redis       *Redis       `gorm:"foreignKey:RedisID" json:"redis,omitempty"`
 	Deployments []Deployment `gorm:"foreignKey:BackupID" json:"deployments"`
 }
 

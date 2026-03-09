@@ -67,6 +67,9 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 			}
 			return nil, err
 		}
+		if project.Environments == nil {
+			project.Environments = []schema.Environment{}
+		}
 		return project, nil
 	}
 
@@ -326,6 +329,14 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 				env.Project = &proj
 			}
 		}
+		// 确保 slice 字段不为 null
+		if env.Applications == nil { env.Applications = []schema.Application{} }
+		if env.Postgres == nil { env.Postgres = []schema.Postgres{} }
+		if env.MySQL == nil { env.MySQL = []schema.MySQL{} }
+		if env.MariaDB == nil { env.MariaDB = []schema.MariaDB{} }
+		if env.Mongo == nil { env.Mongo = []schema.Mongo{} }
+		if env.Redis == nil { env.Redis = []schema.Redis{} }
+		if env.Compose == nil { env.Compose = []schema.Compose{} }
 		return env, nil
 	}
 
@@ -345,6 +356,16 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 			Where("\"projectId\" = ?", in.ProjectID).Find(&envs)
 		if envs == nil {
 			envs = []schema.Environment{}
+		}
+		// 确保每个 environment 的 slice 字段不为 null
+		for i := range envs {
+			if envs[i].Applications == nil { envs[i].Applications = []schema.Application{} }
+			if envs[i].Postgres == nil { envs[i].Postgres = []schema.Postgres{} }
+			if envs[i].MySQL == nil { envs[i].MySQL = []schema.MySQL{} }
+			if envs[i].MariaDB == nil { envs[i].MariaDB = []schema.MariaDB{} }
+			if envs[i].Mongo == nil { envs[i].Mongo = []schema.Mongo{} }
+			if envs[i].Redis == nil { envs[i].Redis = []schema.Redis{} }
+			if envs[i].Compose == nil { envs[i].Compose = []schema.Compose{} }
 		}
 		return envs, nil
 	}

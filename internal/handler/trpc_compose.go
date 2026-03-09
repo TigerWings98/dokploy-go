@@ -42,6 +42,14 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 			Preload("Domains").
 			Preload("Mounts").
 			Preload("Server").
+			Preload("Github").
+			Preload("Github.GitProvider").
+			Preload("Gitlab").
+			Preload("Gitlab.GitProvider").
+			Preload("Gitea").
+			Preload("Gitea.GitProvider").
+			Preload("Bitbucket").
+			Preload("Bitbucket.GitProvider").
 			First(&compose, "\"composeId\" = ?", in.ComposeID).Error
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

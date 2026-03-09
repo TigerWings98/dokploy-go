@@ -33,7 +33,7 @@ type Server struct {
 
 	// Relations
 	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	SSHKey       *SSHKey       `gorm:"foreignKey:SSHKeyID" json:"sshKey,omitempty"`
+	SSHKey       *SSHKey       `gorm:"foreignKey:SSHKeyID;references:SSHKeyID" json:"sshKey,omitempty"`
 	Applications []Application `gorm:"foreignKey:ServerID" json:"applications"`
 	Deployments  []Deployment  `gorm:"foreignKey:ServerID" json:"deployments"`
 }

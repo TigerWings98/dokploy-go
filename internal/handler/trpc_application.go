@@ -62,6 +62,14 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 			Preload("Ports").
 			Preload("Registry").
 			Preload("Server").
+			Preload("Github").
+			Preload("Github.GitProvider").
+			Preload("Gitlab").
+			Preload("Gitlab.GitProvider").
+			Preload("Gitea").
+			Preload("Gitea.GitProvider").
+			Preload("Bitbucket").
+			Preload("Bitbucket.GitProvider").
 			First(&app, "\"applicationId\" = ?", in.ApplicationID).Error
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

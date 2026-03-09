@@ -93,7 +93,6 @@ func (h *Handler) GetServer(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
 	return c.JSON(http.StatusOK, server)
 }
 
@@ -116,7 +115,6 @@ func (h *Handler) ListServers(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
 	return c.JSON(http.StatusOK, servers)
 }
 
@@ -167,7 +165,6 @@ func (h *Handler) SetupServer(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
 	if server.SSHKey == nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "SSH key not configured")
 	}
@@ -206,7 +203,6 @@ func (h *Handler) ValidateServer(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
 	if server.SSHKey == nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "SSH key not configured")
 	}

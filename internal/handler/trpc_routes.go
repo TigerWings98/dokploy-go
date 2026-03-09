@@ -65,7 +65,7 @@ func (h *Handler) findDatabaseService(model interface{}, idField, id string) err
 		Preload("Mounts")
 
 	switch model.(type) {
-	case *schema.Postgres, *schema.MySQL, *schema.MariaDB, *schema.Mongo:
+	case *schema.Postgres, *schema.MySQL, *schema.MariaDB, *schema.Mongo, *schema.Redis:
 		query = query.Preload("Backups").Preload("Backups.Destination")
 	}
 
@@ -117,6 +117,7 @@ func (h *Handler) findDatabaseService(model interface{}, idField, id string) err
 		if m.Backups == nil { m.Backups = []schema.Backup{} }
 	case *schema.Redis:
 		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
+		if m.Backups == nil { m.Backups = []schema.Backup{} }
 	}
 
 	return nil

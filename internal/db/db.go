@@ -6,10 +6,12 @@ package db
 
 import (
 	"fmt"
+	"os"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
 // DB wraps the GORM database connection.
@@ -19,8 +21,16 @@ type DB struct {
 
 // Connect establishes a connection to PostgreSQL.
 func Connect(dsn string) (*DB, error) {
+	// 默认 Warn 级别，设置 DB_LOG=true 开启 SQL 日志
+	logLevel := logger.Warn
+	if os.Getenv("DB_LOG") == "true" {
+		logLevel = logger.Info
+	}
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logLevel),
+		// 禁止 GORM 把字段名转成 snake_case，因为数据库用的是 camelCase 列名
+		// 例如 SSHKeyID 默认会被转成 ssh_key_id，但实际列名是 sshKeyId
+		NamingStrategy: schema.NamingStrategy{NoLowerCase: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)

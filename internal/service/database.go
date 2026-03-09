@@ -35,7 +35,6 @@ func (s *DatabaseService) DeployPostgres(postgresID string) error {
 		First(&pg, "\"postgresId\" = ?", postgresID).Error; err != nil {
 		return err
 	}
-
 	s.updatePostgresStatus(postgresID, schema.ApplicationStatusRunning)
 
 	envVars := map[string]string{
@@ -63,7 +62,6 @@ func (s *DatabaseService) DeployMySQL(mysqlID string) error {
 		First(&my, "\"mysqlId\" = ?", mysqlID).Error; err != nil {
 		return err
 	}
-
 	s.updateMySQLStatus(mysqlID, schema.ApplicationStatusRunning)
 
 	envVars := map[string]string{
@@ -92,7 +90,6 @@ func (s *DatabaseService) DeployMariaDB(mariadbID string) error {
 		First(&mdb, "\"mariadbId\" = ?", mariadbID).Error; err != nil {
 		return err
 	}
-
 	s.updateMariaDBStatus(mariadbID, schema.ApplicationStatusRunning)
 
 	envVars := map[string]string{
@@ -121,7 +118,6 @@ func (s *DatabaseService) DeployMongo(mongoID string) error {
 		First(&mongo, "\"mongoId\" = ?", mongoID).Error; err != nil {
 		return err
 	}
-
 	s.updateMongoStatus(mongoID, schema.ApplicationStatusRunning)
 
 	envVars := map[string]string{
@@ -148,7 +144,6 @@ func (s *DatabaseService) DeployRedis(redisID string) error {
 		First(&redis, "\"redisId\" = ?", redisID).Error; err != nil {
 		return err
 	}
-
 	s.updateRedisStatus(redisID, schema.ApplicationStatusRunning)
 
 	envVars := map[string]string{}

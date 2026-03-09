@@ -123,6 +123,8 @@ func (h *Handler) DeploymentLogs(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid log path")
 	}
 
+	serverId := c.QueryParam("serverId")
+
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		return err
@@ -132,7 +134,7 @@ func (h *Handler) DeploymentLogs(c echo.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Detect client disconnect
+	// 检测客户端断开
 	go func() {
 		for {
 			_, _, err := conn.ReadMessage()
@@ -143,29 +145,40 @@ func (h *Handler) DeploymentLogs(c echo.Context) error {
 		}
 	}()
 
-	file, err := os.Open(cleanPath)
+	// 远程服务器：通过 SSH tail -f 读取日志
+	if serverId != "" {
+		h.deploymentLogsRemote(conn, ctx, serverId, cleanPath)
+		return nil
+	}
+
+	// 本地：直接读取文件
+	h.deploymentLogsLocal(conn, ctx, cleanPath)
+	return nil
+}
+
+// deploymentLogsLocal 从本地文件系统读取日志并流式发送
+func (h *Handler) deploymentLogsLocal(conn *websocket.Conn, ctx context.Context, logPath string) {
+	file, err := os.Open(logPath)
 	if err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error opening log: %v", err)))
-		return nil
+		return
 	}
 	defer file.Close()
 
-	// Read existing content
+	// 读取已有内容
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), 4096)
 	for scanner.Scan() {
 		if ctx.Err() != nil {
-			return nil
+			return
 		}
 		line := append(scanner.Bytes(), '\n')
 		if err := conn.WriteMessage(websocket.TextMessage, line); err != nil {
-			return nil
+			return
 		}
 	}
 
-	// Poll for new content (tail -f behavior)
-	// Polling at 500ms is lighter than fsnotify for single-file watching
-	// and avoids inotify descriptor leaks.
+	// 轮询新内容 (tail -f 行为)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -173,21 +186,90 @@ func (h *Handler) DeploymentLogs(c echo.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			for {
 				n, readErr := file.Read(buf)
 				if n > 0 {
 					if writeErr := conn.WriteMessage(websocket.TextMessage, buf[:n]); writeErr != nil {
-						return nil
+						return
 					}
 				}
 				if readErr != nil {
-					break // EOF or error, wait for next tick
+					break
 				}
 			}
 		}
 	}
+}
+
+// deploymentLogsRemote 通过 SSH 在远程服务器上执行 tail -f 读取日志
+func (h *Handler) deploymentLogsRemote(conn *websocket.Conn, ctx context.Context, serverId, logPath string) {
+	var server schema.Server
+	if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", serverId).Error; err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Server not found: %v\n", err)))
+		return
+	}
+	if server.SSHKey == nil {
+		conn.WriteMessage(websocket.TextMessage, []byte("No SSH key configured for this server\n"))
+		return
+	}
+
+	signer, err := ssh.ParsePrivateKey([]byte(server.SSHKey.PrivateKey))
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH key error: %v\n", err)))
+		return
+	}
+
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", server.IPAddress, server.Port), &ssh.ClientConfig{
+		User:            server.Username,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH connection error: %v\n", err)))
+		return
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH session error: %v\n", err)))
+		return
+	}
+	defer session.Close()
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH pipe error: %v\n", err)))
+		return
+	}
+
+	// 在远程服务器上执行 tail -n +1 -f（与 TS 版一致）
+	if err := session.Start(fmt.Sprintf("tail -n +1 -f %s", logPath)); err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Command error: %v\n", err)))
+		return
+	}
+
+	// 流式读取远程输出并发送到 WebSocket
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				if writeErr := conn.WriteMessage(websocket.TextMessage, buf[:n]); writeErr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// 等待客户端断开
+	<-ctx.Done()
+	session.Signal(ssh.SIGTERM)
 }
 
 // --- Container Logs ---
@@ -798,7 +880,7 @@ func (h *Handler) dockerTerminalViaSSH(conn *websocket.Conn, serverId, container
 		return
 	}
 	if server.SSHKey == nil {
-		conn.WriteMessage(websocket.TextMessage, []byte("No SSH key for server"))
+		conn.WriteMessage(websocket.TextMessage, []byte("No SSH key configured for this server"))
 		return
 	}
 
@@ -942,7 +1024,7 @@ func (h *Handler) serverTerminalRemote(conn *websocket.Conn, serverId string) {
 		return
 	}
 	if server.SSHKey == nil {
-		conn.WriteMessage(websocket.TextMessage, []byte("No SSH key for server\n"))
+		conn.WriteMessage(websocket.TextMessage, []byte("No SSH key configured for this server\n"))
 		return
 	}
 

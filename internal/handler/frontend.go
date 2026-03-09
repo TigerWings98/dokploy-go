@@ -79,6 +79,14 @@ func (h *Handler) RegisterFrontendRoutes(e *echo.Echo) {
 		// 1. Try exact file match (JS, CSS, images, etc.)
 		filePath := filepath.Join(distDir, path)
 		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+			// _next/static/* 文件名含 hash，可长期缓存
+			if strings.HasPrefix(path, "/_next/static/") {
+				c.Response().Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else if strings.HasPrefix(path, "/_next/") || strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") {
+				c.Response().Header().Set("Cache-Control", "public, max-age=86400")
+			} else if strings.HasSuffix(path, ".png") || strings.HasSuffix(path, ".jpg") || strings.HasSuffix(path, ".svg") || strings.HasSuffix(path, ".ico") || strings.HasSuffix(path, ".woff2") {
+				c.Response().Header().Set("Cache-Control", "public, max-age=604800")
+			}
 			staticFS.ServeHTTP(c.Response(), c.Request())
 			return nil
 		}

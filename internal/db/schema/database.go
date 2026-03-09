@@ -252,6 +252,7 @@ type Redis struct {
 	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
 	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
 	Mounts      []Mount      `gorm:"foreignKey:RedisID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:RedisID" json:"backups"`
 }
 
 func (Redis) TableName() string              { return "redis" }

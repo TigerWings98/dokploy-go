@@ -127,7 +127,6 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
 			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
 		}
-
 		if server.SSHKey == nil {
 			return nil, &trpcErr{"Server has no SSH key", "BAD_REQUEST", 400}
 		}

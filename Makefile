@@ -1,6 +1,7 @@
-.PHONY: build run test clean dev
+.PHONY: build run test clean dev docker-build docker-push
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
+REGISTRY ?= dokploy-go
 LDFLAGS := -X github.com/dokploy/dokploy/internal/updater.Version=$(VERSION)
 
 # Build the main server binary
@@ -27,9 +28,17 @@ clean:
 deps:
 	go mod tidy
 
-# Build Docker image
+# Build Docker image (local)
 docker-build:
-	docker build --build-arg VERSION=$(VERSION) -t dokploy-go:$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t $(REGISTRY):$(VERSION) .
+
+# Build and push multi-arch Docker image
+# Usage: make docker-push VERSION=28.0.5 REGISTRY=crpi-xxx.cn-shanghai.personal.cr.aliyuncs.com/tigerking/dokploy-go
+docker-push:
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		--build-arg VERSION=$(VERSION) \
+		-t $(REGISTRY):$(VERSION) \
+		-f Dockerfile . --push
 
 # Format code
 fmt:

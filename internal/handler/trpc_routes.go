@@ -8,6 +8,7 @@ import (
 	"github.com/dokploy/dokploy/internal/db/schema"
 	mw "github.com/dokploy/dokploy/internal/middleware"
 	"github.com/labstack/echo/v4"
+	"gorm.io/gorm"
 )
 
 // getDefaultMember returns the default org member for the current user.
@@ -65,8 +66,10 @@ func (h *Handler) findDatabaseService(model interface{}, idField, id string) err
 		Preload("Mounts")
 
 	switch model.(type) {
-	case *schema.Postgres, *schema.MySQL, *schema.MariaDB, *schema.Mongo, *schema.Redis:
-		query = query.Preload("Backups").Preload("Backups.Destination")
+	case *schema.Postgres, *schema.MySQL, *schema.MariaDB, *schema.Mongo:
+		query = query.Preload("Backups").Preload("Backups.Destination").Preload("Backups.Deployments", func(db *gorm.DB) *gorm.DB {
+			return db.Order("\"createdAt\" DESC")
+		})
 	}
 
 	if err := query.Where(quotedID+" = ?", id).First(model).Error; err != nil {
@@ -117,7 +120,6 @@ func (h *Handler) findDatabaseService(model interface{}, idField, id string) err
 		if m.Backups == nil { m.Backups = []schema.Backup{} }
 	case *schema.Redis:
 		if m.Mounts == nil { m.Mounts = []schema.Mount{} }
-		if m.Backups == nil { m.Backups = []schema.Backup{} }
 	}
 
 	return nil

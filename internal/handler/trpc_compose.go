@@ -50,6 +50,11 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 			Preload("Gitea.GitProvider").
 			Preload("Bitbucket").
 			Preload("Bitbucket.GitProvider").
+			Preload("Backups").
+			Preload("Backups.Destination").
+			Preload("Backups.Deployments", func(db *gorm.DB) *gorm.DB {
+				return db.Order("\"createdAt\" DESC")
+			}).
 			First(&compose, "\"composeId\" = ?", in.ComposeID).Error
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -63,6 +68,7 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 		if compose.Mounts == nil { compose.Mounts = []schema.Mount{} }
 		if compose.Security == nil { compose.Security = []schema.Security{} }
 		if compose.Redirects == nil { compose.Redirects = []schema.Redirect{} }
+		if compose.Backups == nil { compose.Backups = []schema.Backup{} }
 
 		if compose.EnvironmentID != "" {
 			var env schema.Environment

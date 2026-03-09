@@ -42,25 +42,32 @@ func (d *Destination) BeforeCreate(tx *gorm.DB) error {
 
 // Backup represents the backup table.
 type Backup struct {
-	BackupID      string       `gorm:"column:backupId;primaryKey;type:text" json:"backupId"`
-	Schedule      string       `gorm:"column:schedule;type:text;not null" json:"schedule"`
-	Enabled       *bool        `gorm:"column:enabled" json:"enabled"`
-	Prefix        string       `gorm:"column:prefix;type:text;not null" json:"prefix"`
-	DatabaseType  DatabaseType `gorm:"column:database;type:text;not null" json:"database"`
-	CreatedAt     string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
-	DestinationID string       `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
-	PostgresID    *string      `gorm:"column:postgresId;type:text" json:"postgresId"`
-	MySQLID       *string      `gorm:"column:mysqlId;type:text" json:"mysqlId"`
-	MariaDBID     *string      `gorm:"column:mariadbId;type:text" json:"mariadbId"`
-	MongoID       *string      `gorm:"column:mongoId;type:text" json:"mongoId"`
-	RedisID       *string      `gorm:"column:redisId;type:text" json:"redisId"`
+	BackupID        string       `gorm:"column:backupId;primaryKey;type:text" json:"backupId"`
+	AppName         string       `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
+	Schedule        string       `gorm:"column:schedule;type:text;not null" json:"schedule"`
+	Enabled         *bool        `gorm:"column:enabled" json:"enabled"`
+	Prefix          string       `gorm:"column:prefix;type:text;not null" json:"prefix"`
+	DatabaseType    DatabaseType `gorm:"column:database;type:text;not null" json:"database"`
+	ServiceName     *string      `gorm:"column:serviceName;type:text" json:"serviceName"`
+	KeepLatestCount *int         `gorm:"column:keepLatestCount" json:"keepLatestCount"`
+	BackupType      string       `gorm:"column:backupType;type:text;not null;default:'database'" json:"backupType"`
+	BackupDBType    string       `gorm:"column:databaseType;type:text;not null" json:"databaseType"`
+	CreatedAt       string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
+	DestinationID   string       `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
+	ComposeID       *string      `gorm:"column:composeId;type:text" json:"composeId"`
+	PostgresID      *string      `gorm:"column:postgresId;type:text" json:"postgresId"`
+	MySQLID         *string      `gorm:"column:mysqlId;type:text" json:"mysqlId"`
+	MariaDBID       *string      `gorm:"column:mariadbId;type:text" json:"mariadbId"`
+	MongoID         *string      `gorm:"column:mongoId;type:text" json:"mongoId"`
+	UserID          *string      `gorm:"column:userId;type:text" json:"userId"`
+	Metadata        *string      `gorm:"column:metadata;type:jsonb" json:"metadata"`
 
 	Destination *Destination `gorm:"foreignKey:DestinationID;references:DestinationID" json:"destination,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
 	Postgres    *Postgres    `gorm:"foreignKey:PostgresID;references:PostgresID" json:"postgres,omitempty"`
 	MySQL       *MySQL       `gorm:"foreignKey:MySQLID;references:MySQLID" json:"mysql,omitempty"`
 	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID;references:MariaDBID" json:"mariadb,omitempty"`
 	Mongo       *Mongo       `gorm:"foreignKey:MongoID;references:MongoID" json:"mongo,omitempty"`
-	Redis       *Redis       `gorm:"foreignKey:RedisID;references:RedisID" json:"redis,omitempty"`
 	Deployments []Deployment `gorm:"foreignKey:BackupID;references:BackupID" json:"deployments"`
 }
 

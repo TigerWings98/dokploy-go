@@ -61,6 +61,7 @@ type Compose struct {
 	Gitea           *Gitea       `gorm:"foreignKey:GiteaID;references:GiteaID" json:"gitea,omitempty"`
 	Bitbucket       *Bitbucket   `gorm:"foreignKey:BitbucketID;references:BitbucketID" json:"bitbucket,omitempty"`
 	CustomGitSSHKey *SSHKey      `gorm:"foreignKey:CustomGitSSHKeyID;references:SSHKeyID" json:"customGitSSHKey,omitempty"`
+	Backups         []Backup     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"backups"`
 }
 
 func (Compose) TableName() string { return "compose" }

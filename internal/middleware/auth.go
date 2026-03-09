@@ -115,13 +115,16 @@ func TRPCAuthMiddleware(a *auth.Auth, publicProcedures ...string) echo.Middlewar
 }
 
 func trpcUnauthorized(c echo.Context, message string) error {
+	// tRPC v11 要求 error 也经过 superjson transformer 序列化（包裹在 json 字段中）
 	return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 		"error": map[string]interface{}{
-			"message": message,
-			"code":    -32001,
-			"data": map[string]interface{}{
-				"code":       "UNAUTHORIZED",
-				"httpStatus": 401,
+			"json": map[string]interface{}{
+				"message": message,
+				"code":    -32001,
+				"data": map[string]interface{}{
+					"code":       "UNAUTHORIZED",
+					"httpStatus": 401,
+				},
 			},
 		},
 	})

@@ -33,8 +33,14 @@ type TRPCData struct {
 	JSON interface{} `json:"json"`
 }
 
+// TRPCErrorResponse wraps error in superjson format for tRPC v11 兼容
 type TRPCErrorResponse struct {
-	Error TRPCErrorData `json:"error"`
+	Error TRPCSuperJSONError `json:"error"`
+}
+
+// TRPCSuperJSONError 使用 superjson 格式包装错误（tRPC v11 要求 error 也经过 transformer 序列化）
+type TRPCSuperJSONError struct {
+	JSON TRPCErrorData `json:"json"`
 }
 
 type TRPCErrorData struct {
@@ -119,10 +125,12 @@ func (h *Handler) handleBatchTRPC(c echo.Context, procNames []string) error {
 		input, err := h.extractInput(c, idx)
 		if err != nil {
 			results[i] = TRPCErrorResponse{
-				Error: TRPCErrorData{
-					Message: err.Error(),
-					Code:    -32600,
-					Data:    &TRPCErrorInfo{Code: "BAD_REQUEST", HTTPStatus: 400},
+				Error: TRPCSuperJSONError{
+					JSON: TRPCErrorData{
+						Message: err.Error(),
+						Code:    -32600,
+						Data:    &TRPCErrorInfo{Code: "BAD_REQUEST", HTTPStatus: 400},
+					},
 				},
 			}
 			continue
@@ -215,10 +223,12 @@ func (h *Handler) callProcedure(c echo.Context, name string, input json.RawMessa
 
 func (h *Handler) trpcError(c echo.Context, message, code string, status int) error {
 	return c.JSON(status, TRPCErrorResponse{
-		Error: TRPCErrorData{
-			Message: message,
-			Code:    -32600,
-			Data:    &TRPCErrorInfo{Code: code, HTTPStatus: status},
+		Error: TRPCSuperJSONError{
+			JSON: TRPCErrorData{
+				Message: message,
+				Code:    -32600,
+				Data:    &TRPCErrorInfo{Code: code, HTTPStatus: status},
+			},
 		},
 	})
 }
@@ -238,10 +248,12 @@ func (h *Handler) buildErrorResult(err error) interface{} {
 		status = te.status
 	}
 	return TRPCErrorResponse{
-		Error: TRPCErrorData{
-			Message: err.Error(),
-			Code:    -32600,
-			Data:    &TRPCErrorInfo{Code: code, HTTPStatus: status},
+		Error: TRPCSuperJSONError{
+			JSON: TRPCErrorData{
+				Message: err.Error(),
+				Code:    -32600,
+				Data:    &TRPCErrorInfo{Code: code, HTTPStatus: status},
+			},
 		},
 	}
 }

@@ -5,6 +5,7 @@ import {
 	Info,
 	RefreshCcw,
 	Server,
+	Settings2,
 	Sparkles,
 	Stars,
 } from "lucide-react";
@@ -45,6 +46,7 @@ export const UpdateServer = ({
 	const [isUpdateAvailable, setIsUpdateAvailable] = useState(
 		!!updateData?.updateAvailable,
 	);
+	const [isNotConfigured, setIsNotConfigured] = useState(false);
 	const { mutateAsync: getUpdateData, isPending } =
 		api.settings.getUpdateData.useMutation();
 	const { data: dokployVersion } = api.settings.getDokployVersion.useQuery();
@@ -61,8 +63,13 @@ export const UpdateServer = ({
 			setHasCheckedUpdate(true);
 			setIsUpdateAvailable(updateData.updateAvailable);
 			setLatestVersion(versionToUpdate);
+			setIsNotConfigured(updateData.configured === false);
 
-			if (updateData.updateAvailable) {
+			if (updateData.configured === false) {
+				toast.warning(
+					"Update source not configured. Please configure it in Update Source settings.",
+				);
+			} else if (updateData.updateAvailable) {
 				toast.success(versionToUpdate, {
 					description: "New version available!",
 				});
@@ -195,8 +202,28 @@ export const UpdateServer = ({
 					</div>
 				)}
 
+				{/* Not configured state */}
+				{hasCheckedUpdate && isNotConfigured && !isPending && (
+					<div className="mb-8">
+						<div className="flex flex-col items-center gap-6 mb-6">
+							<div className="rounded-full p-4 bg-amber-400/40">
+								<Settings2 className="h-8 w-8 text-amber-400" />
+							</div>
+							<div className="text-center space-y-2">
+								<h3 className="text-lg font-medium">
+									Update source not configured
+								</h3>
+								<p className="text text-muted-foreground">
+									Please configure the update source first by clicking the
+									&quot;Update Source&quot; button below the version number.
+								</p>
+							</div>
+						</div>
+					</div>
+				)}
+
 				{/* Up to date state */}
-				{hasCheckedUpdate && !isUpdateAvailable && !isPending && (
+				{hasCheckedUpdate && !isUpdateAvailable && !isNotConfigured && !isPending && (
 					<div className="mb-8">
 						<div className="flex flex-col items-center gap-6 mb-6">
 							<div className="rounded-full p-4 bg-emerald-400/40">

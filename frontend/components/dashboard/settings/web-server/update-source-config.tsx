@@ -68,7 +68,7 @@ export const UpdateSourceConfig = () => {
 	const form = useForm<Schema>({
 		defaultValues: {
 			registryImage: "",
-			registryId: "",
+			registryId: "none",
 			serviceName: "dokploy",
 		},
 		resolver: zodResolver(schema),
@@ -78,7 +78,7 @@ export const UpdateSourceConfig = () => {
 		if (config) {
 			form.reset({
 				registryImage: config.registryImage || "",
-				registryId: config.registryId || "",
+				registryId: config.registryId || "none",
 				serviceName: config.serviceName || "dokploy",
 			});
 		}
@@ -87,7 +87,7 @@ export const UpdateSourceConfig = () => {
 	const onSubmit = async (data: Schema) => {
 		await updateConfig({
 			registryImage: data.registryImage,
-			registryId: data.registryId || null,
+			registryId: data.registryId === "none" ? null : data.registryId,
 			serviceName: data.serviceName,
 		})
 			.then(async () => {
@@ -106,7 +106,7 @@ export const UpdateSourceConfig = () => {
 			const data = form.getValues();
 			await updateConfig({
 				registryImage: data.registryImage,
-				registryId: data.registryId || null,
+				registryId: data.registryId === "none" ? null : data.registryId,
 				serviceName: data.serviceName,
 			});
 			await refetch();
@@ -199,7 +199,7 @@ export const UpdateSourceConfig = () => {
 											</SelectTrigger>
 										</FormControl>
 										<SelectContent>
-											<SelectItem value="">
+											<SelectItem value="none">
 												None (Public Registry)
 											</SelectItem>
 											{registries?.map((r: any) => (

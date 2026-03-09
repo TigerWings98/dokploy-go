@@ -29,6 +29,7 @@ var Version = "0.0.0-dev"
 type UpdateData struct {
 	UpdateAvailable bool    `json:"updateAvailable"`
 	LatestVersion   *string `json:"latestVersion"`
+	Configured      bool    `json:"configured"` // 更新源是否已配置
 }
 
 // Updater 管理版本检测和自更新
@@ -140,12 +141,13 @@ func (u *Updater) getRegistryAuth() (user, password string) {
 
 // CheckUpdate 检查是否有新版本可用
 func (u *Updater) CheckUpdate() UpdateData {
-	noUpdate := UpdateData{UpdateAvailable: false, LatestVersion: nil}
-
 	image := u.getImage()
 	if image == "" {
-		return noUpdate
+		// 未配置更新源，返回 configured=false 让前端提示用户去配置
+		return UpdateData{UpdateAvailable: false, LatestVersion: nil, Configured: false}
 	}
+
+	noUpdate := UpdateData{UpdateAvailable: false, LatestVersion: nil, Configured: true}
 
 	tags, err := u.listRegistryTags(image)
 	if err != nil {
@@ -178,6 +180,7 @@ func (u *Updater) CheckUpdate() UpdateData {
 	return UpdateData{
 		UpdateAvailable: true,
 		LatestVersion:   &latest,
+		Configured:      true,
 	}
 }
 

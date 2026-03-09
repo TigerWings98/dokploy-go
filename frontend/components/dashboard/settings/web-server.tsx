@@ -12,6 +12,7 @@ import { ShowStorageActions } from "./servers/actions/show-storage-actions";
 import { ShowTraefikActions } from "./servers/actions/show-traefik-actions";
 import { ToggleDockerCleanup } from "./servers/actions/toggle-docker-cleanup";
 import { UpdateServer } from "./web-server/update-server";
+import { UpdateSourceConfig } from "./web-server/update-source-config";
 
 export const WebServer = () => {
 	const { data: webServerSettings } =
@@ -52,9 +53,12 @@ export const WebServer = () => {
 							<span className="text-sm text-muted-foreground">
 								Server IP: {webServerSettings?.serverIp}
 							</span>
-							<span className="text-sm text-muted-foreground">
-								Version: {dokployVersion}
-							</span>
+							<div className="flex items-center gap-2">
+								<span className="text-sm text-muted-foreground">
+									Version: {dokployVersion}
+								</span>
+								<UpdateSourceConfig />
+							</div>
 
 							<ToggleDockerCleanup />
 						</div>

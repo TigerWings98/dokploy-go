@@ -93,7 +93,7 @@ func (u *Updater) reloadConfig() {
 	u.mu.Unlock()
 }
 
-// getImage 获取当前配置的镜像名（优先 DB，其次环境变量）
+// getImage 获取当前配置的镜像名（优先 DB，其次环境变量，未配置则返回空）
 func (u *Updater) getImage() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
@@ -103,7 +103,8 @@ func (u *Updater) getImage() string {
 	if env := os.Getenv("DOKPLOY_IMAGE"); env != "" {
 		return env
 	}
-	return "dokploy/dokploy"
+	// 不再 fallback 到官方 TS 版镜像，未配置时返回空，CheckUpdate 会直接返回"无更新"
+	return ""
 }
 
 // getServiceName 获取 Docker service 名称

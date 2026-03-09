@@ -7,11 +7,11 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
-	"golang.org/x/crypto/ssh"
 )
 
 func (h *Handler) registerServerTRPC(r procedureRegistry) {
@@ -117,41 +117,114 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		return cmd, nil
 	}
 
+	// server.validate - 通过 SSH 执行验证脚本，检查 Docker/RClone/Nixpacks/Buildpacks/Railpack/Swarm/Network/目录（与 TS 版完全一致）
 	r["server.validate"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			ServerID string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
 
-		var server schema.Server
-		if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
-			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
-		}
-		if server.SSHKey == nil {
-			return nil, &trpcErr{"Server has no SSH key", "BAD_REQUEST", 400}
-		}
+		// 通过 SSH 执行验证脚本（与 TS 版 server-validate.ts 完全一致）
+		bashCommand := `
+command_exists() {
+  command -v "$@" > /dev/null 2>&1
+}
 
-		signer, err := ssh.ParsePrivateKey([]byte(server.SSHKey.PrivateKey))
+# Docker
+if command_exists docker; then
+  dockerVersionEnabled="$(docker --version | awk '{print $3}' | sed 's/,//') true"
+else
+  dockerVersionEnabled="0.0.0 false"
+fi
+
+# RClone
+if command_exists rclone; then
+  rcloneVersionEnabled="$(rclone --version | head -n 1 | awk '{print $2}' | sed 's/^v//') true"
+else
+  rcloneVersionEnabled="0.0.0 false"
+fi
+
+# Nixpacks
+if command_exists nixpacks; then
+  version=$(nixpacks --version | awk '{print $2}')
+  if [ -n "$version" ]; then
+    nixpacksVersionEnabled="$version true"
+  else
+    nixpacksVersionEnabled="0.0.0 false"
+  fi
+else
+  nixpacksVersionEnabled="0.0.0 false"
+fi
+
+# Buildpacks
+if command_exists pack; then
+  version=$(pack --version | awk '{print $1}')
+  if [ -n "$version" ]; then
+    buildpacksVersionEnabled="$version true"
+  else
+    buildpacksVersionEnabled="0.0.0 false"
+  fi
+else
+  buildpacksVersionEnabled="0.0.0 false"
+fi
+
+# Railpack
+if command_exists railpack; then
+  version=$(railpack --version | awk '{print $3}')
+  if [ -n "$version" ]; then
+    railpackVersionEnabled="$version true"
+  else
+    railpackVersionEnabled="0.0.0 false"
+  fi
+else
+  railpackVersionEnabled="0.0.0 false"
+fi
+
+dockerVersion=$(echo $dockerVersionEnabled | awk '{print $1}')
+dockerEnabled=$(echo $dockerVersionEnabled | awk '{print $2}')
+rcloneVersion=$(echo $rcloneVersionEnabled | awk '{print $1}')
+rcloneEnabled=$(echo $rcloneVersionEnabled | awk '{print $2}')
+nixpacksVersion=$(echo $nixpacksVersionEnabled | awk '{print $1}')
+nixpacksEnabled=$(echo $nixpacksVersionEnabled | awk '{print $2}')
+buildpacksVersion=$(echo $buildpacksVersionEnabled | awk '{print $1}')
+buildpacksEnabled=$(echo $buildpacksVersionEnabled | awk '{print $2}')
+railpackVersion=$(echo $railpackVersionEnabled | awk '{print $1}')
+railpackEnabled=$(echo $railpackVersionEnabled | awk '{print $2}')
+
+# Swarm
+if docker info --format '{{.Swarm.LocalNodeState}}' | grep -q 'active'; then
+  isSwarmInstalled=true
+else
+  isSwarmInstalled=false
+fi
+
+# Network
+if docker network ls | grep -q 'dokploy-network'; then
+  isDokployNetworkInstalled=true
+else
+  isDokployNetworkInstalled=false
+fi
+
+# Main directory
+if [ -d "/etc/dokploy" ]; then
+  isMainDirectoryInstalled=true
+else
+  isMainDirectoryInstalled=false
+fi
+
+echo "{\"docker\": {\"version\": \"$dockerVersion\", \"enabled\": $dockerEnabled}, \"rclone\": {\"version\": \"$rcloneVersion\", \"enabled\": $rcloneEnabled}, \"nixpacks\": {\"version\": \"$nixpacksVersion\", \"enabled\": $nixpacksEnabled}, \"buildpacks\": {\"version\": \"$buildpacksVersion\", \"enabled\": $buildpacksEnabled}, \"railpack\": {\"version\": \"$railpackVersion\", \"enabled\": $railpackEnabled}, \"isDokployNetworkInstalled\": $isDokployNetworkInstalled, \"isSwarmInstalled\": $isSwarmInstalled, \"isMainDirectoryInstalled\": $isMainDirectoryInstalled}"
+`
+		sid := in.ServerID
+		stdout, err := h.execDockerCommand(&sid, bashCommand)
 		if err != nil {
-			return nil, &trpcErr{"Invalid SSH key: " + err.Error(), "BAD_REQUEST", 400}
+			return nil, &trpcErr{fmt.Sprintf("Validation failed: %s", err.Error()), "BAD_REQUEST", 400}
 		}
 
-		config := &ssh.ClientConfig{
-			User:            server.Username,
-			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-			Timeout:         10 * time.Second,
+		var result map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &result); jsonErr != nil {
+			return nil, &trpcErr{fmt.Sprintf("Failed to parse validation output: %s", jsonErr.Error()), "BAD_REQUEST", 400}
 		}
-
-		addr := fmt.Sprintf("%s:%d", server.IPAddress, server.Port)
-		client, err := ssh.Dial("tcp", addr, config)
-		if err != nil {
-			return nil, &trpcErr{fmt.Sprintf("SSH connection failed: %s", err.Error()), "BAD_REQUEST", 400}
-		}
-		client.Close()
-
-		h.DB.Model(&server).Update("\"serverStatus\"", "active")
-		return true, nil
+		return result, nil
 	}
 
 	r["server.publicIp"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -163,19 +236,87 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		return "", nil
 	}
 
+	// server.security - 通过 SSH 执行安全审计脚本，检查 UFW/SSH/Fail2Ban（与 TS 版 server-audit.ts 完全一致）
 	r["server.security"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			ServerID string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
-		var server schema.Server
-		if err := h.DB.First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
-			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
+
+		bashCommand := `
+command_exists() {
+  command -v "$@" > /dev/null 2>&1
+}
+
+# UFW Validation
+if command -v ufw >/dev/null 2>&1; then
+  ufwInstalled=true
+  ufwActive=$(sudo ufw status | grep -q "Status: active" && echo true || echo false)
+  ufwDefaultIncoming=$(sudo ufw status verbose | grep "Default:" | grep "incoming" | awk '{print $2}')
+  ufwStatus="{\"installed\": $ufwInstalled, \"active\": $ufwActive, \"defaultIncoming\": \"$ufwDefaultIncoming\"}"
+else
+  ufwStatus="{\"installed\": false, \"active\": false, \"defaultIncoming\": \"unknown\"}"
+fi
+
+# SSH Validation
+if systemctl is-active --quiet sshd || systemctl is-active --quiet ssh; then
+  sshEnabled=true
+  sshd_config=$(sudo sshd -T 2>/dev/null | grep -i "^configfile" | awk '{print $2}')
+  if [ -z "$sshd_config" ]; then
+    sshd_config="/etc/ssh/sshd_config"
+  fi
+  pubkey_line=$(sudo grep -i "^PubkeyAuthentication" "$sshd_config" 2>/dev/null | grep -v "#")
+  if [ -z "$pubkey_line" ] || echo "$pubkey_line" | grep -q -i "yes"; then
+    sshKeyAuth=true
+  else
+    sshKeyAuth=false
+  fi
+  sshPermitRootLogin=$(sudo grep -i "^PermitRootLogin" "$sshd_config" 2>/dev/null | grep -v "#" | awk '{print $2}')
+  if [ -z "$sshPermitRootLogin" ]; then
+    sshPermitRootLogin="prohibit-password"
+  fi
+  sshPasswordAuth=$(sudo grep -i "^PasswordAuthentication" "$sshd_config" 2>/dev/null | grep -v "#" | awk '{print $2}')
+  if [ -z "$sshPasswordAuth" ]; then
+    sshPasswordAuth="yes"
+  fi
+  sshUsePam=$(sudo grep -i "^UsePAM" "$sshd_config" 2>/dev/null | grep -v "#" | awk '{print $2}')
+  if [ -z "$sshUsePam" ]; then
+    sshUsePam="yes"
+  fi
+  sshStatus="{\"enabled\": $sshEnabled, \"keyAuth\": $sshKeyAuth, \"permitRootLogin\": \"$sshPermitRootLogin\", \"passwordAuth\": \"$sshPasswordAuth\", \"usePam\": \"$sshUsePam\"}"
+else
+  sshStatus="{\"enabled\": false, \"keyAuth\": false, \"permitRootLogin\": \"unknown\", \"passwordAuth\": \"unknown\", \"usePam\": \"unknown\"}"
+fi
+
+# Fail2Ban Validation
+if dpkg -l | grep -q "fail2ban"; then
+  f2bInstalled=true
+  f2bEnabled=$(systemctl is-enabled --quiet fail2ban.service && echo true || echo false)
+  f2bActive=$(systemctl is-active --quiet fail2ban.service && echo true || echo false)
+  if [ -f "/etc/fail2ban/jail.local" ]; then
+    f2bSshEnabled=$(grep -A10 "^\[sshd\]" /etc/fail2ban/jail.local | grep "enabled" | awk '{print $NF}' | tr -d '[:space:]')
+    f2bSshMode=$(grep -A10 "^\[sshd\]" /etc/fail2ban/jail.local | grep "^mode[[:space:]]*=[[:space:]]*aggressive" >/dev/null && echo "aggressive" || echo "normal")
+    fail2banStatus="{\"installed\": $f2bInstalled, \"enabled\": $f2bEnabled, \"active\": $f2bActive, \"sshEnabled\": \"$f2bSshEnabled\", \"sshMode\": \"$f2bSshMode\"}"
+  else
+    fail2banStatus="{\"installed\": $f2bInstalled, \"enabled\": $f2bEnabled, \"active\": $f2bActive, \"sshEnabled\": \"false\", \"sshMode\": \"normal\"}"
+  fi
+else
+  fail2banStatus="{\"installed\": false, \"enabled\": false, \"active\": false, \"sshEnabled\": \"false\", \"sshMode\": \"normal\"}"
+fi
+
+echo "{\"ufw\": $ufwStatus, \"ssh\": $sshStatus, \"fail2ban\": $fail2banStatus}"
+`
+		sid := in.ServerID
+		stdout, err := h.execDockerCommand(&sid, bashCommand)
+		if err != nil {
+			return nil, &trpcErr{fmt.Sprintf("Security audit failed: %s", err.Error()), "BAD_REQUEST", 400}
 		}
-		return map[string]interface{}{
-			"serverId":     server.ServerID,
-			"serverStatus": server.ServerStatus,
-		}, nil
+
+		var result map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &result); jsonErr != nil {
+			return nil, &trpcErr{fmt.Sprintf("Failed to parse security audit output: %s", jsonErr.Error()), "BAD_REQUEST", 400}
+		}
+		return result, nil
 	}
 
 	r["server.setupMonitoring"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

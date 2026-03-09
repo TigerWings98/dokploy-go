@@ -5,12 +5,14 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +20,50 @@ import (
 	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 )
+
+// treeDataItem 与 TS 版 TreeDataItem 一致的目录树结构
+type treeDataItem struct {
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Type     string         `json:"type"` // "file" or "directory"
+	Children []treeDataItem `json:"children,omitempty"`
+}
+
+// readDirectoryTree 递归读取目录树（与 TS 版 readDirectory 本地模式一致）
+func readDirectoryTree(dirPath string) []treeDataItem {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return []treeDataItem{}
+	}
+	var result []treeDataItem
+	for _, entry := range entries {
+		fullPath := filepath.Join(dirPath, entry.Name())
+		if entry.IsDir() {
+			item := treeDataItem{
+				ID:       fullPath,
+				Name:     entry.Name(),
+				Type:     "directory",
+				Children: readDirectoryTree(fullPath),
+			}
+			result = append(result, item)
+		} else {
+			result = append(result, treeDataItem{
+				ID:   fullPath,
+				Name: entry.Name(),
+				Type: "file",
+			})
+		}
+	}
+	if result == nil {
+		result = []treeDataItem{}
+	}
+	return result
+}
+
+// base64Encode 将字符串进行 base64 编码（用于远程写文件）
+func base64Encode(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
 
 func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	r["settings.getWebServerSettings"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -314,77 +360,88 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
+	// readDirectories - 读取 Traefik 配置目录树（与 TS 版一致，始终从 MAIN_TRAEFIK_PATH 开始）
+	// 返回递归树形结构 TreeDataItem[]：{id, name, type, children?}
 	r["settings.readDirectories"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		// 与 TS 版一致：始终从 MAIN_TRAEFIK_PATH 开始
+		traefikPath := "/etc/dokploy/traefik"
+		if h.Config != nil {
+			traefikPath = h.Config.Paths.MainTraefikPath
+		}
+
+		if in.ServerID != nil && *in.ServerID != "" {
+			// 远程服务器：通过 SSH 执行 shell 脚本生成 JSON 树（与 TS 版完全一致）
+			stdout, err := h.execDockerCommand(in.ServerID, fmt.Sprintf(`
+process_items() {
+    local parent_dir="$1"
+    local __resultvar=$2
+    local items_json=""
+    local first=true
+    for item in "$parent_dir"/*; do
+        [ -e "$item" ] || continue
+        process_item "$item" item_json
+        if [ "$first" = true ]; then
+            first=false
+            items_json="$item_json"
+        else
+            items_json="$items_json,$item_json"
+        fi
+    done
+    eval $__resultvar="'[$items_json]'"
+}
+process_item() {
+    local item_path="$1"
+    local __resultvar=$2
+    local item_name=$(basename "$item_path")
+    local escaped_name=$(echo "$item_name" | sed 's/"/\\"/g')
+    local escaped_path=$(echo "$item_path" | sed 's/"/\\"/g')
+    if [ -d "$item_path" ]; then
+        process_items "$item_path" children_json
+        local json='{"id":"'"$escaped_path"'","name":"'"$escaped_name"'","type":"directory","children":'"$children_json"'}'
+    else
+        local json='{"id":"'"$escaped_path"'","name":"'"$escaped_name"'","type":"file"}'
+    fi
+    eval $__resultvar="'$json'"
+}
+process_items "%s" json_output
+echo "$json_output"
+`, traefikPath))
+			if err != nil {
+				return []interface{}{}, nil
+			}
+			var result []interface{}
+			if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &result); jsonErr != nil {
+				return []interface{}{}, nil
+			}
+			return result, nil
+		}
+
+		// 本地：递归读取目录树
+		result := readDirectoryTree(traefikPath)
+		return result, nil
+	}
+
+	// readTraefikFile - 读取 Traefik 配置文件内容（支持远程服务器）
+	r["settings.readTraefikFile"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			Path     string  `json:"path"`
 			ServerID *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
-		path := in.Path
-		if path == "" {
-			path = "/"
-		}
 
 		if in.ServerID != nil && *in.ServerID != "" {
-			// Read directories from remote server via SSH
-			var srv schema.Server
-			if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", *in.ServerID).Error; err != nil {
-				return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
-			}
-			if srv.SSHKey == nil {
-				return nil, &trpcErr{"Server SSH key not configured", "BAD_REQUEST", 400}
-			}
-			conn := process.SSHConnection{
-				Host:       srv.IPAddress,
-				Port:       srv.Port,
-				Username:   srv.Username,
-				PrivateKey: srv.SSHKey.PrivateKey,
-			}
-			// List files as JSON: name and type
-			cmd := fmt.Sprintf(`ls -1pa %q | head -200`, path)
-			result, err := process.ExecAsyncRemote(conn, cmd, nil)
+			stdout, err := h.execDockerCommand(in.ServerID, fmt.Sprintf("cat %q 2>/dev/null", in.Path))
 			if err != nil {
-				return nil, &trpcErr{"Failed to read remote directory: " + err.Error(), "BAD_REQUEST", 400}
+				return "", nil
 			}
-			var dirs []map[string]interface{}
-			for _, line := range strings.Split(result.Stdout, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" || line == "./" || line == "../" {
-					continue
-				}
-				isDir := strings.HasSuffix(line, "/")
-				name := strings.TrimSuffix(line, "/")
-				dirs = append(dirs, map[string]interface{}{
-					"name":  name,
-					"isDir": isDir,
-				})
-			}
-			if dirs == nil {
-				dirs = []map[string]interface{}{}
-			}
-			return dirs, nil
+			return stdout, nil
 		}
 
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			return nil, &trpcErr{"Cannot read directory: " + err.Error(), "BAD_REQUEST", 400}
-		}
-		var dirs []map[string]interface{}
-		for _, entry := range entries {
-			dirs = append(dirs, map[string]interface{}{
-				"name":  entry.Name(),
-				"isDir": entry.IsDir(),
-			})
-		}
-		if dirs == nil {
-			dirs = []map[string]interface{}{}
-		}
-		return dirs, nil
-	}
-
-	r["settings.readTraefikFile"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		var in struct{ Path string `json:"path"` }
-		json.Unmarshal(input, &in)
 		data, err := os.ReadFile(in.Path)
 		if err != nil {
 			return "", nil
@@ -392,12 +449,26 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 		return string(data), nil
 	}
 
+	// updateTraefikFile - 更新 Traefik 配置文件（支持远程服务器，使用 base64 编码）
 	r["settings.updateTraefikFile"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			Path          string `json:"path"`
-			TraefikConfig string `json:"traefikConfig"`
+			Path          string  `json:"path"`
+			TraefikConfig string  `json:"traefikConfig"`
+			ServerID      *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
+
+		if in.ServerID != nil && *in.ServerID != "" {
+			// 远程服务器：base64 编码后写入（与 TS 版一致）
+			encoded := base64Encode(in.TraefikConfig)
+			cmd := fmt.Sprintf("echo '%s' | base64 -d > %q", encoded, in.Path)
+			_, err := h.execDockerCommand(in.ServerID, cmd)
+			if err != nil {
+				return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+			}
+			return true, nil
+		}
+
 		if err := os.WriteFile(in.Path, []byte(in.TraefikConfig), 0644); err != nil {
 			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
 		}

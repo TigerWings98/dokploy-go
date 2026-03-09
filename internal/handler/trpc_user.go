@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 func (h *Handler) registerUserTRPC(r procedureRegistry) {
@@ -114,8 +115,22 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
 		}
 		var u schema.User
-		if err := h.DB.Preload("APIKeys").First(&u, "id = ?", user.ID).Error; err != nil {
+		if err := h.DB.
+			Preload("APIKeys").
+			Preload("Backups").
+			Preload("Backups.Destination").
+			Preload("Backups.Deployments", func(db *gorm.DB) *gorm.DB {
+				return db.Order("\"createdAt\" DESC")
+			}).
+			First(&u, "id = ?", user.ID).Error; err != nil {
 			return nil, &trpcErr{"User not found", "NOT_FOUND", 404}
+		}
+		// 确保 slice 返回 [] 而非 null
+		if u.Backups == nil {
+			u.Backups = []schema.Backup{}
+		}
+		if u.APIKeys == nil {
+			u.APIKeys = []schema.APIKey{}
 		}
 		return u, nil
 	}

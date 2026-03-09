@@ -43,6 +43,7 @@ type User struct {
 	Account       *Account       `gorm:"foreignKey:UserID;references:ID" json:"account,omitempty"`
 	Organizations []Organization `gorm:"foreignKey:OwnerID;references:ID" json:"organizations"`
 	APIKeys       []APIKey       `gorm:"foreignKey:UserID;references:ID" json:"apiKeys"`
+	Backups       []Backup       `gorm:"foreignKey:UserID;references:ID" json:"backups"`
 }
 
 func (User) TableName() string { return "user" }

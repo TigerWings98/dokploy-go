@@ -46,9 +46,11 @@ func (s *ApplicationService) FindByID(appID string) (*schema.Application, error)
 		Preload("Security").
 		Preload("Ports").
 		Preload("Environment").
+		Preload("Environment.Project").
 		Preload("Server").
 		Preload("Server.SSHKey").
 		Preload("Registry").
+		Preload("BuildRegistry").
 		Preload("Github").
 		Preload("Gitlab").
 		Preload("Gitea").
@@ -292,52 +294,35 @@ func (s *ApplicationService) createService(app *schema.Application, writeLog fun
 }
 
 func (s *ApplicationService) createServiceLocal(app *schema.Application, writeLog func(string)) error {
-	imageName := app.AppName
-	if app.SourceType == schema.SourceTypeDocker && app.DockerImage != nil {
-		imageName = *app.DockerImage
+	imageName := getImageName(app)
+	envVars := s.resolveEnvVars(app)
+
+	// Registry 登录
+	if loginCmd := buildRegistryLoginCmd(app); loginCmd != "" {
+		writeLog("Logging into registry...")
+		process.ExecAsync(loginCmd)
 	}
 
-	// Build docker service create command
-	cmd := fmt.Sprintf("docker service create --name %s --network dokploy-network", app.AppName)
-
-	// Environment variables
-	if app.Env != nil && *app.Env != "" {
-		envMap := parseEnvString(*app.Env)
-		for k, v := range envMap {
-			cmd += fmt.Sprintf(" --env %s=%s", k, v)
-		}
-	}
-
-	// Resource limits
-	if app.MemoryLimit != nil && *app.MemoryLimit != "" {
-		cmd += fmt.Sprintf(" --limit-memory %s", *app.MemoryLimit)
-	}
-	if app.CPULimit != nil && *app.CPULimit != "" {
-		cmd += fmt.Sprintf(" --limit-cpu %s", *app.CPULimit)
-	}
-
-	// Replicas
-	cmd += fmt.Sprintf(" --replicas %d", app.Replicas)
-
-	// Command override
-	if app.Command != nil && *app.Command != "" {
-		cmd += fmt.Sprintf(" %s %s", imageName, *app.Command)
-	} else {
-		cmd += " " + imageName
+	// 文件挂载准备（将文件内容写入磁盘）
+	if fileCmd := buildFileMountsSetupCmd(app.AppName, app.Mounts); fileCmd != "" {
+		writeLog("Preparing file mounts...")
+		process.ExecAsync(fileCmd)
 	}
 
 	writeLog(fmt.Sprintf("Creating service: %s", app.AppName))
 
-	// Check if service already exists, if so update instead
+	// 与 TS 版一致：先尝试 update，失败则 create
 	_, err := process.ExecAsync(fmt.Sprintf("docker service inspect %s", app.AppName))
 	if err == nil {
-		// Service exists, update it
-		updateCmd := fmt.Sprintf("docker service update --force --image %s %s", imageName, app.AppName)
+		// 服务已存在，使用 update（保留零停机滚动更新）
+		updateCmd := buildServiceUpdateCmd(app, imageName, envVars)
 		writeLog("Service exists, updating...")
 		_, err = process.ExecAsyncStream(updateCmd, writeLog)
 		return err
 	}
 
+	// 服务不存在，创建新服务
+	cmd := buildServiceCreateCmd(app, imageName, envVars)
 	_, err = process.ExecAsyncStream(cmd, writeLog)
 	return err
 }
@@ -347,13 +332,8 @@ func (s *ApplicationService) createServiceRemote(app *schema.Application, writeL
 		return fmt.Errorf("server or SSH key not found")
 	}
 
-	imageName := app.AppName
-	if app.SourceType == schema.SourceTypeDocker && app.DockerImage != nil {
-		imageName = *app.DockerImage
-	}
-
-	cmd := fmt.Sprintf("docker service update --force --image %s %s || docker service create --name %s --network dokploy-network %s",
-		imageName, app.AppName, app.AppName, imageName)
+	imageName := getImageName(app)
+	envVars := s.resolveEnvVars(app)
 
 	conn := process.SSHConnection{
 		Host:       app.Server.IPAddress,
@@ -362,8 +342,45 @@ func (s *ApplicationService) createServiceRemote(app *schema.Application, writeL
 		PrivateKey: app.Server.SSHKey.PrivateKey,
 	}
 
+	// Registry 登录
+	if loginCmd := buildRegistryLoginCmd(app); loginCmd != "" {
+		writeLog("Logging into registry on remote...")
+		process.ExecAsyncRemote(conn, loginCmd, nil)
+	}
+
+	// 文件挂载准备
+	if fileCmd := buildFileMountsSetupCmd(app.AppName, app.Mounts); fileCmd != "" {
+		writeLog("Preparing file mounts on remote...")
+		process.ExecAsyncRemote(conn, fileCmd, nil)
+	}
+
+	// 与 TS 版一致：先尝试 update，失败则 create
+	updateCmd := buildServiceUpdateCmd(app, imageName, envVars)
+	createCmd := buildServiceCreateCmd(app, imageName, envVars)
+	// 使用 || 连接：update 失败时自动 create
+	cmd := fmt.Sprintf("%s || %s", updateCmd, createCmd)
+
+	writeLog(fmt.Sprintf("Creating/updating service on remote: %s", app.AppName))
 	_, err := process.ExecAsyncRemote(conn, cmd, writeLog)
 	return err
+}
+
+// resolveEnvVars 解析应用环境变量，支持 project/environment 模板变量替换
+func (s *ApplicationService) resolveEnvVars(app *schema.Application) []string {
+	serviceEnv := safeStr(app.Env)
+	if serviceEnv == "" {
+		return nil
+	}
+
+	var projectEnv, environmentEnv string
+	if app.Environment != nil {
+		environmentEnv = app.Environment.Env
+		if app.Environment.Project != nil {
+			projectEnv = app.Environment.Project.Env
+		}
+	}
+
+	return prepareEnvironmentVariables(serviceEnv, projectEnv, environmentEnv)
 }
 
 // Rebuild rebuilds an application without re-cloning source code.

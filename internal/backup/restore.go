@@ -1,11 +1,12 @@
 // Input: rclone CLI, Docker SDK (exec 恢复命令), S3 文件路径
-// Output: RestoreBackup (从 S3 下载+Docker exec 导入), ListS3Files (列出备份文件)
-// Role: 数据库备份恢复服务，从 S3 下载备份文件并通过 Docker exec 导入到数据库容器
+// Output: RestoreBackup (数据库恢复), RestoreWebServerBackup (全服务器恢复), ListBackupFiles (列出备份文件)
+// Role: 数据库/Web Server 备份恢复服务，从 S3 下载备份文件并恢复到本地或远程服务器
 // 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package backup
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -140,6 +141,154 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 		}
 	}
 
+	return nil
+}
+
+// RestoreWebServerBackup 从 S3 下载 Web Server 备份 zip 并恢复文件系统 + Dokploy PostgreSQL 数据库。
+// 与 TS 版 restoreWebServerBackup 完全一致。
+func (s *Service) RestoreWebServerBackup(destinationID string, backupFile string, emit func(string)) error {
+	var dest schema.Destination
+	if err := s.db.First(&dest, "\"destinationId\" = ?", destinationID).Error; err != nil {
+		return fmt.Errorf("destination not found: %w", err)
+	}
+
+	rcloneFlags := getRcloneFlags(&dest)
+	bucketPath := fmt.Sprintf(":s3:%s", dest.Bucket)
+	backupPath := fmt.Sprintf("%s/%s", bucketPath, backupFile)
+	basePath := s.cfg.Paths.BasePath
+
+	// 创建临时目录
+	tempDir, err := os.MkdirTemp("", "dokploy-restore-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer func() {
+		emit("Cleaning up temporary files...")
+		os.RemoveAll(tempDir)
+	}()
+
+	emit("Starting restore...")
+	emit(fmt.Sprintf("Backup path: %s", backupPath))
+	emit(fmt.Sprintf("Temp directory: %s", tempDir))
+
+	// 从 S3 下载备份
+	emit("Downloading backup from S3...")
+	dlCmd := fmt.Sprintf(`rclone copyto %s "%s" "%s/%s"`, rcloneFlags, backupPath, tempDir, backupFile)
+	if _, err := process.ExecAsync(dlCmd); err != nil {
+		return fmt.Errorf("failed to download backup: %w", err)
+	}
+
+	// 列出文件
+	emit("Listing files before extraction...")
+	if result, err := process.ExecAsync(fmt.Sprintf("ls -la %s", tempDir)); err == nil && result != nil {
+		emit(fmt.Sprintf("Files before extraction: %s", result.Stdout))
+	}
+
+	// 解压备份
+	emit("Extracting backup...")
+	if _, err := process.ExecAsync(fmt.Sprintf("cd %s && unzip %s > /dev/null 2>&1", tempDir, backupFile)); err != nil {
+		return fmt.Errorf("failed to extract backup: %w", err)
+	}
+
+	// 恢复文件系统
+	emit("Restoring filesystem...")
+	emit(fmt.Sprintf("Copying from %s/filesystem/* to %s/", tempDir, basePath))
+
+	emit("Cleaning target directory...")
+	if _, err := process.ExecAsync(fmt.Sprintf(`rm -rf "%s/"*`, basePath)); err != nil {
+		return fmt.Errorf("failed to clean target directory: %w", err)
+	}
+
+	emit("Setting up target directory...")
+	if _, err := process.ExecAsync(fmt.Sprintf(`mkdir -p "%s"`, basePath)); err != nil {
+		return fmt.Errorf("failed to create target directory: %w", err)
+	}
+
+	emit("Copying files...")
+	if _, err := process.ExecAsync(fmt.Sprintf(`cp -rp "%s/filesystem/"* "%s/"`, tempDir, basePath)); err != nil {
+		return fmt.Errorf("failed to copy filesystem: %w", err)
+	}
+
+	// 数据库恢复
+	emit("Starting database restore...")
+
+	// 检查是否有压缩的数据库文件
+	if result, _ := process.ExecAsync(fmt.Sprintf("ls %s/database.sql.gz || true", tempDir)); result != nil && strings.Contains(result.Stdout, "database.sql.gz") {
+		emit("Found compressed database file, decompressing...")
+		if _, err := process.ExecAsync(fmt.Sprintf("cd %s && gunzip database.sql.gz", tempDir)); err != nil {
+			return fmt.Errorf("failed to decompress database file: %w", err)
+		}
+	}
+
+	// 验证数据库文件存在
+	if result, _ := process.ExecAsync(fmt.Sprintf("ls %s/database.sql || true", tempDir)); result == nil || !strings.Contains(result.Stdout, "database.sql") {
+		return fmt.Errorf("database file not found after extraction")
+	}
+
+	// 查找 dokploy-postgres 容器
+	containerResult, err := process.ExecAsync(`docker ps --filter "name=dokploy-postgres" --filter "status=running" -q | head -n 1`)
+	if err != nil || containerResult == nil || strings.TrimSpace(containerResult.Stdout) == "" {
+		return fmt.Errorf("dokploy postgres container not found")
+	}
+	postgresContainerID := strings.TrimSpace(containerResult.Stdout)
+
+	// 断开所有连接
+	emit("Disconnecting all users from database...")
+	disconnectCmd := fmt.Sprintf(
+		`docker exec %s psql -U dokploy postgres -c "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'dokploy' AND pid <> pg_backend_pid();"`,
+		postgresContainerID,
+	)
+	process.ExecAsync(disconnectCmd) // 忽略错误，可能没有活跃连接
+
+	// 删除并重建数据库
+	emit("Dropping existing database...")
+	if _, err := process.ExecAsync(fmt.Sprintf(
+		`docker exec %s psql -U dokploy postgres -c "DROP DATABASE IF EXISTS dokploy;"`,
+		postgresContainerID,
+	)); err != nil {
+		return fmt.Errorf("failed to drop database: %w", err)
+	}
+
+	emit("Creating fresh database...")
+	if _, err := process.ExecAsync(fmt.Sprintf(
+		`docker exec %s psql -U dokploy postgres -c "CREATE DATABASE dokploy;"`,
+		postgresContainerID,
+	)); err != nil {
+		return fmt.Errorf("failed to create database: %w", err)
+	}
+
+	// 复制备份文件到容器
+	emit("Copying backup file into container...")
+	if _, err := process.ExecAsync(fmt.Sprintf(
+		`docker cp %s/database.sql %s:/tmp/database.sql`,
+		tempDir, postgresContainerID,
+	)); err != nil {
+		return fmt.Errorf("failed to copy backup file to container: %w", err)
+	}
+
+	// 验证容器内文件
+	emit("Verifying file in container...")
+	if _, err := process.ExecAsync(fmt.Sprintf(
+		`docker exec %s ls -l /tmp/database.sql`,
+		postgresContainerID,
+	)); err != nil {
+		return fmt.Errorf("backup file not found in container: %w", err)
+	}
+
+	// 恢复数据库
+	emit("Running database restore...")
+	if _, err := process.ExecAsync(fmt.Sprintf(
+		`docker exec %s pg_restore -v -U dokploy -d dokploy /tmp/database.sql`,
+		postgresContainerID,
+	)); err != nil {
+		return fmt.Errorf("failed to restore database: %w", err)
+	}
+
+	// 清理容器内临时文件
+	emit("Cleaning up container temp file...")
+	process.ExecAsync(fmt.Sprintf(`docker exec %s rm /tmp/database.sql`, postgresContainerID))
+
+	emit("Restore completed successfully!")
 	return nil
 }
 

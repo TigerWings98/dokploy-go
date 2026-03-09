@@ -102,9 +102,17 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 	}
 
 	// backup.restoreBackupWithLogs
+	// 输入与 TS 版 apiRestoreBackup 一致：databaseId, databaseType, backupType, databaseName, backupFile, destinationId
 	s["backup.restoreBackupWithLogs"] = func(c echo.Context, input json.RawMessage, emit chan<- interface{}) {
 		defer close(emit)
 		var in struct {
+			DatabaseID    string `json:"databaseId"`
+			DatabaseType  string `json:"databaseType"`
+			BackupType    string `json:"backupType"`
+			DatabaseName  string `json:"databaseName"`
+			BackupFile    string `json:"backupFile"`
+			DestinationID string `json:"destinationId"`
+			// 向后兼容旧格式
 			BackupID string `json:"backupId"`
 			FileName string `json:"fileName"`
 		}
@@ -112,15 +120,36 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 
 		emit <- "Starting backup restore..."
 
-		if h.BackupSvc != nil {
-			err := h.BackupSvc.RestoreBackup(in.BackupID, in.FileName)
+		if h.BackupSvc == nil {
+			emit <- "Error: backup service not available"
+			return
+		}
+
+		// Web Server 恢复走独立路径（不需要 backupId，直接用 destinationId + backupFile）
+		if in.DatabaseType == "web-server" {
+			err := h.BackupSvc.RestoreWebServerBackup(in.DestinationID, in.BackupFile, func(log string) {
+				emit <- log
+			})
 			if err != nil {
 				emit <- "Error: " + err.Error()
 				return
 			}
+		} else {
+			// 数据库/Compose 恢复走原有 RestoreBackup
+			backupID := in.BackupID
+			fileName := in.FileName
+			if backupID == "" {
+				backupID = in.DatabaseID
+			}
+			if fileName == "" {
+				fileName = in.BackupFile
+			}
+			if err := h.BackupSvc.RestoreBackup(backupID, fileName); err != nil {
+				emit <- "Error: " + err.Error()
+				return
+			}
+			emit <- "Backup restored successfully!"
 		}
-
-		emit <- "Backup restored successfully!"
 	}
 
 	// volumeBackups.restoreVolumeBackupWithLogs

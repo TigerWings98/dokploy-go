@@ -9,12 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/process"
@@ -83,11 +81,17 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.getReleaseTag"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]string{"releaseTag": "v0.28.5"}, nil
+		if h.Updater != nil {
+			return map[string]string{"releaseTag": h.Updater.GetReleaseTag()}, nil
+		}
+		return map[string]string{"releaseTag": "latest"}, nil
 	}
 
 	r["settings.getDokployVersion"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return "v0.28.5", nil
+		if h.Updater != nil {
+			return h.Updater.GetVersion(), nil
+		}
+		return "v0.0.0-dev", nil
 	}
 
 	r["settings.health"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -95,65 +99,12 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.getUpdateData"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		defaultResult := map[string]interface{}{
+		if h.Updater != nil {
+			return h.Updater.CheckUpdate(), nil
+		}
+		return map[string]interface{}{
 			"updateAvailable": false,
 			"latestVersion":   nil,
-		}
-
-		type dockerTag struct {
-			Digest string `json:"digest"`
-			Name   string `json:"name"`
-		}
-		type dockerResp struct {
-			Next    *string     `json:"next"`
-			Results []dockerTag `json:"results"`
-		}
-
-		var allTags []dockerTag
-		apiURL := "https://hub.docker.com/v2/repositories/dokploy/dokploy/tags?page_size=100"
-		client := &http.Client{Timeout: 10 * time.Second}
-
-		for apiURL != "" {
-			resp, err := client.Get(apiURL)
-			if err != nil {
-				return defaultResult, nil
-			}
-			var data dockerResp
-			json.NewDecoder(resp.Body).Decode(&data)
-			resp.Body.Close()
-			allTags = append(allTags, data.Results...)
-			if data.Next != nil {
-				apiURL = *data.Next
-			} else {
-				apiURL = ""
-			}
-		}
-
-		var latestDigest string
-		for _, t := range allTags {
-			if t.Name == "latest" {
-				latestDigest = t.Digest
-				break
-			}
-		}
-		if latestDigest == "" {
-			return defaultResult, nil
-		}
-
-		var latestVersion string
-		for _, t := range allTags {
-			if t.Digest == latestDigest && len(t.Name) > 0 && t.Name[0] == 'v' {
-				latestVersion = t.Name
-				break
-			}
-		}
-		if latestVersion == "" {
-			return defaultResult, nil
-		}
-
-		return map[string]interface{}{
-			"updateAvailable": true,
-			"latestVersion":   latestVersion,
 		}, nil
 	}
 
@@ -270,6 +221,11 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.reloadServer"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Updater != nil {
+			if err := h.Updater.ReloadService(); err != nil {
+				return nil, &trpcErr{err.Error(), "INTERNAL_SERVER_ERROR", 500}
+			}
+		}
 		return true, nil
 	}
 
@@ -672,7 +628,63 @@ echo "$json_output"
 	}
 
 	r["settings.updateServer"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Updater == nil {
+			return nil, &trpcErr{"Updater not available", "INTERNAL_SERVER_ERROR", 500}
+		}
+		// 获取最新版本并执行更新（异步，不阻塞）
+		data := h.Updater.CheckUpdate()
+		if !data.UpdateAvailable || data.LatestVersion == nil {
+			return nil, &trpcErr{"No update available", "BAD_REQUEST", 400}
+		}
+		if err := h.Updater.ApplyUpdate(*data.LatestVersion); err != nil {
+			return nil, &trpcErr{err.Error(), "INTERNAL_SERVER_ERROR", 500}
+		}
 		return true, nil
+	}
+
+	// Go 版专属：更新源配置（读取/修改 go_config 表，Registry 通过 FK 关联）
+	r["settings.getRegistryConfig"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Updater == nil {
+			return nil, &trpcErr{"Updater not available", "INTERNAL_SERVER_ERROR", 500}
+		}
+		cfg := h.Updater.GetConfig()
+		return cfg, nil
+	}
+
+	r["settings.updateRegistryConfig"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Updater == nil {
+			return nil, &trpcErr{"Updater not available", "INTERNAL_SERVER_ERROR", 500}
+		}
+		var in struct {
+			RegistryImage string  `json:"registryImage"`
+			RegistryID    *string `json:"registryId"` // 关联已有的 Registry 记录（nil 表示清除）
+			ServiceName   string  `json:"serviceName"`
+		}
+		json.Unmarshal(input, &in)
+
+		cfg := h.Updater.GetConfig()
+		cfg.RegistryImage = in.RegistryImage
+		cfg.RegistryID = in.RegistryID
+		if in.ServiceName != "" {
+			cfg.ServiceName = in.ServiceName
+		}
+
+		if err := h.Updater.UpdateConfig(cfg); err != nil {
+			return nil, &trpcErr{err.Error(), "INTERNAL_SERVER_ERROR", 500}
+		}
+		return true, nil
+	}
+
+	r["settings.testRegistryConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Updater == nil {
+			return nil, &trpcErr{"Updater not available", "INTERNAL_SERVER_ERROR", 500}
+		}
+		data := h.Updater.CheckUpdate()
+		return map[string]interface{}{
+			"success":         true,
+			"updateAvailable": data.UpdateAvailable,
+			"latestVersion":   data.LatestVersion,
+		}, nil
 	}
 
 	r["settings.updateLogCleanup"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

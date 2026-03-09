@@ -9,10 +9,12 @@ RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
+ARG VERSION=v0.0.0-dev
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/server ./cmd/server && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/scheduler ./cmd/scheduler && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/api ./cmd/api
+    LDFLAGS="-s -w -X github.com/dokploy/dokploy/internal/updater.Version=${VERSION}" && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="$LDFLAGS" -o /out/server ./cmd/server && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="$LDFLAGS" -o /out/scheduler ./cmd/scheduler && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="$LDFLAGS" -o /out/api ./cmd/api
 
 # ============================================================
 # Stage 2: Build frontend (Next.js static export)

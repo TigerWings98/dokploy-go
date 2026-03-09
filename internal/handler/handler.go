@@ -16,6 +16,7 @@ import (
 	"github.com/dokploy/dokploy/internal/scheduler"
 	"github.com/dokploy/dokploy/internal/service"
 	"github.com/dokploy/dokploy/internal/traefik"
+	"github.com/dokploy/dokploy/internal/updater"
 	"github.com/labstack/echo/v4"
 )
 
@@ -33,6 +34,7 @@ type Handler struct {
 	PreviewSvc *service.PreviewService
 	ComposeSvc *service.ComposeService
 	AppSvc     *service.ApplicationService
+	Updater    *updater.Updater
 	CertsPath  string
 }
 
@@ -101,6 +103,11 @@ func WithComposeService(s *service.ComposeService) HandlerOption {
 // WithApplicationService sets the application service.
 func WithApplicationService(s *service.ApplicationService) HandlerOption {
 	return func(h *Handler) { h.AppSvc = s }
+}
+
+// WithUpdater sets the updater.
+func WithUpdater(u *updater.Updater) HandlerOption {
+	return func(h *Handler) { h.Updater = u }
 }
 
 // RegisterRoutes registers all API routes.

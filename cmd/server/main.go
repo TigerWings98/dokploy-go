@@ -26,6 +26,7 @@ import (
 	"github.com/dokploy/dokploy/internal/service"
 	"github.com/dokploy/dokploy/internal/setup"
 	"github.com/dokploy/dokploy/internal/traefik"
+	"github.com/dokploy/dokploy/internal/updater"
 	"github.com/dokploy/dokploy/internal/ws"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -187,6 +188,9 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// Initialize updater（从 go_config 表读取更新源配置）
+	upd := updater.New(database)
+
 	// Register REST API routes
 	h := handler.New(database, a,
 		handler.WithConfig(cfg),
@@ -200,6 +204,7 @@ func main() {
 		handler.WithPreviewService(previewSvc),
 		handler.WithComposeService(composeSvc),
 		handler.WithApplicationService(appSvc),
+		handler.WithUpdater(upd),
 	)
 	h.RegisterRoutes(e)
 

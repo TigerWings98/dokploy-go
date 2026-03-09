@@ -1,8 +1,11 @@
 .PHONY: build run test clean dev
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
+LDFLAGS := -X github.com/dokploy/dokploy/internal/updater.Version=$(VERSION)
+
 # Build the main server binary
 build:
-	go build -o bin/server ./cmd/server
+	go build -ldflags="$(LDFLAGS)" -o bin/server ./cmd/server
 
 # Run the server in development mode
 dev:
@@ -26,7 +29,7 @@ deps:
 
 # Build Docker image
 docker-build:
-	docker build -t dokploy-go:latest .
+	docker build --build-arg VERSION=$(VERSION) -t dokploy-go:$(VERSION) .
 
 # Format code
 fmt:

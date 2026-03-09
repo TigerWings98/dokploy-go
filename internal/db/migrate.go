@@ -103,7 +103,8 @@ func (d *DB) AutoMigrateFrom(migrationsDir string) error {
 
 	if len(pending) == 0 {
 		log.Println("All migrations already applied, nothing to do")
-		return nil
+		// 仍然需要确保 Go 扩展表存在
+		return d.migrateGoTables()
 	}
 
 	log.Printf("Found %d pending migration(s) to apply (total: %d)", len(pending), len(journal.Entries))
@@ -156,6 +157,27 @@ func (d *DB) AutoMigrateFrom(migrationsDir string) error {
 	}
 
 	log.Printf("Successfully applied %d migration(s)", len(pending))
+
+	// Go 版扩展表自动建表（go_ 前缀，不影响 TS 版 Drizzle 迁移）
+	if err := d.migrateGoTables(); err != nil {
+		return fmt.Errorf("failed to migrate Go extension tables: %w", err)
+	}
+
+	return nil
+}
+
+// migrateGoTables 用 GORM AutoMigrate 管理 Go 版专属表（go_ 前缀）
+func (d *DB) migrateGoTables() error {
+	if err := d.DB.AutoMigrate(&schema.GoConfig{}); err != nil {
+		return err
+	}
+	// 确保单行默认配置存在
+	var count int64
+	d.DB.Model(&schema.GoConfig{}).Count(&count)
+	if count == 0 {
+		d.DB.Create(&schema.GoConfig{ID: "default"})
+		log.Println("Created default go_config row")
+	}
 	return nil
 }
 

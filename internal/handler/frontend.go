@@ -76,6 +76,11 @@ func (h *Handler) RegisterFrontendRoutes(e *echo.Echo) {
 			return c.Redirect(http.StatusFound, "/")
 		}
 
+		// Redirect authenticated users from login/register pages to dashboard
+		if (path == "/" || path == "/register" || path == "/send-reset-password") && h.isAuthenticated(c) {
+			return c.Redirect(http.StatusFound, "/dashboard/projects")
+		}
+
 		// 1. Try exact file match (JS, CSS, images, etc.)
 		filePath := filepath.Join(distDir, path)
 		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {

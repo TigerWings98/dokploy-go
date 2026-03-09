@@ -46,12 +46,12 @@ type Backup struct {
 	AppName         string       `gorm:"column:appName;type:text;not null;uniqueIndex" json:"appName"`
 	Schedule        string       `gorm:"column:schedule;type:text;not null" json:"schedule"`
 	Enabled         *bool        `gorm:"column:enabled" json:"enabled"`
+	Database        string       `gorm:"column:database;type:text;not null" json:"database"`
 	Prefix          string       `gorm:"column:prefix;type:text;not null" json:"prefix"`
-	DatabaseType    DatabaseType `gorm:"column:database;type:text;not null" json:"database"`
 	ServiceName     *string      `gorm:"column:serviceName;type:text" json:"serviceName"`
 	KeepLatestCount *int         `gorm:"column:keepLatestCount" json:"keepLatestCount"`
 	BackupType      string       `gorm:"column:backupType;type:text;not null;default:'database'" json:"backupType"`
-	BackupDBType    string       `gorm:"column:databaseType;type:text;not null" json:"databaseType"`
+	DatabaseType    DatabaseType `gorm:"column:databaseType;type:text;not null" json:"databaseType"`
 	CreatedAt       string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	DestinationID   string       `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
 	ComposeID       *string      `gorm:"column:composeId;type:text" json:"composeId"`

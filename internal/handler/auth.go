@@ -364,6 +364,7 @@ func (h *Handler) setSessionCookie(c echo.Context, token string, expires time.Ti
 		Value:    token,
 		Path:     "/",
 		Expires:  expires,
+		MaxAge:   int(time.Until(expires).Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}

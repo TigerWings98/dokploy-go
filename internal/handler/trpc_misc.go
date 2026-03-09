@@ -8,9 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
+	"os/exec"
 	"strings"
-	"time"
 
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -83,23 +82,40 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 
 	r["destination.testConnection"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			AccessKey      string `json:"accessKey"`
+			AccessKey      string  `json:"accessKey"`
 			SecretAccessKey string `json:"secretAccessKey"`
-			Bucket         string `json:"bucket"`
-			Region         string `json:"region"`
-			Endpoint       string `json:"endpoint"`
+			Bucket         string  `json:"bucket"`
+			Region         string  `json:"region"`
+			Endpoint       string  `json:"endpoint"`
+			Provider       *string `json:"provider"`
 		}
 		json.Unmarshal(input, &in)
-		endpoint := in.Endpoint
-		if !strings.HasPrefix(endpoint, "http") {
-			endpoint = "https://" + endpoint
+
+		// 使用 rclone ls 实际测试 S3 连接（与 TS 版一致）
+		rcloneFlags := []string{
+			fmt.Sprintf(`--s3-access-key-id=%s`, in.AccessKey),
+			fmt.Sprintf(`--s3-secret-access-key=%s`, in.SecretAccessKey),
+			fmt.Sprintf(`--s3-region=%s`, in.Region),
+			fmt.Sprintf(`--s3-endpoint=%s`, in.Endpoint),
+			"--s3-no-check-bucket",
+			"--s3-force-path-style",
+			"--retries", "1",
+			"--low-level-retries", "1",
+			"--timeout", "10s",
+			"--contimeout", "5s",
 		}
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Head(endpoint)
+		if in.Provider != nil && *in.Provider != "" {
+			rcloneFlags = append([]string{fmt.Sprintf(`--s3-provider=%s`, *in.Provider)}, rcloneFlags...)
+		}
+
+		args := append([]string{"ls"}, rcloneFlags...)
+		args = append(args, fmt.Sprintf(":s3:%s", in.Bucket))
+
+		cmd := exec.CommandContext(c.Request().Context(), "rclone", args...)
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return nil, &trpcErr{fmt.Sprintf("Cannot reach endpoint: %s", err.Error()), "BAD_REQUEST", 400}
+			return nil, &trpcErr{fmt.Sprintf("S3 connection failed: %s", strings.TrimSpace(string(output))), "BAD_REQUEST", 400}
 		}
-		resp.Body.Close()
 		return true, nil
 	}
 

@@ -15,6 +15,7 @@ import (
 type Destination struct {
 	DestinationID  string  `gorm:"column:destinationId;primaryKey;type:text" json:"destinationId"`
 	Name           string  `gorm:"column:name;type:text;not null" json:"name"`
+	Provider       *string `gorm:"column:provider;type:text" json:"provider"`
 	AccessKey      string  `gorm:"column:accessKey;type:text;not null" json:"accessKey"`
 	SecretAccessKey string `gorm:"column:secretAccessKey;type:text;not null" json:"secretAccessKey"`
 	Bucket         string  `gorm:"column:bucket;type:text;not null" json:"bucket"`

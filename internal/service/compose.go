@@ -7,6 +7,7 @@ package service
 import (
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,20 +17,23 @@ import (
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/docker"
+	"github.com/dokploy/dokploy/internal/email"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/process"
 	"gorm.io/gorm"
 )
 
 // ComposeService handles Docker Compose business logic.
 type ComposeService struct {
-	db     *db.DB
-	docker *docker.Client
-	cfg    *config.Config
+	db       *db.DB
+	docker   *docker.Client
+	cfg      *config.Config
+	notifier *notify.Notifier
 }
 
 // NewComposeService creates a new ComposeService.
-func NewComposeService(database *db.DB, dockerClient *docker.Client, cfg *config.Config) *ComposeService {
-	return &ComposeService{db: database, docker: dockerClient, cfg: cfg}
+func NewComposeService(database *db.DB, dockerClient *docker.Client, cfg *config.Config, notifier *notify.Notifier) *ComposeService {
+	return &ComposeService{db: database, docker: dockerClient, cfg: cfg, notifier: notifier}
 }
 
 // FindByID finds a compose by ID with preloads.
@@ -203,6 +207,9 @@ func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.
 		})
 	s.updateStatus(compose.ComposeID, schema.ApplicationStatusDone)
 	writeLog("Compose rebuild completed successfully!")
+
+	// 发送重建成功通知
+	s.sendComposeSuccessNotification(compose)
 }
 
 func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.Deployment) {
@@ -253,6 +260,9 @@ func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.D
 
 	s.updateStatus(compose.ComposeID, schema.ApplicationStatusDone)
 	writeLog("Compose deployment completed successfully!")
+
+	// 发送部署成功通知
+	s.sendComposeSuccessNotification(compose)
 }
 
 // runDeployRemote 远程部署：与 TS 版完全一致，将准备源码和 compose up 作为 SSH 命令发送
@@ -553,6 +563,9 @@ func (s *ComposeService) failDeployment(deploymentID, composeID, errMsg string) 
 			"finishedAt":   now,
 		})
 	s.updateStatus(composeID, schema.ApplicationStatusError)
+
+	// 发送构建失败通知
+	s.sendComposeErrorNotification(composeID, errMsg)
 }
 
 // sshConn 从 Server 构建 SSH 连接参数
@@ -568,5 +581,107 @@ func (s *ComposeService) sshConn(server *schema.Server) process.SSHConnection {
 // base64Encode 将字符串 base64 编码（用于通过 SSH 安全传输文件内容）
 func base64Encode(s string) string {
 	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+// getComposeOrgID 从 compose 关联链获取 organizationId
+func (s *ComposeService) getComposeOrgID(compose *schema.Compose) string {
+	if compose.Environment != nil && compose.Environment.Project != nil {
+		return compose.Environment.Project.OrganizationID
+	}
+	var env schema.Environment
+	if err := s.db.Preload("Project").First(&env, "\"environmentId\" = ?", compose.EnvironmentID).Error; err != nil {
+		return ""
+	}
+	if env.Project != nil {
+		return env.Project.OrganizationID
+	}
+	return ""
+}
+
+func (s *ComposeService) getComposeProjectName(compose *schema.Compose) string {
+	if compose.Environment != nil && compose.Environment.Project != nil {
+		return compose.Environment.Project.Name
+	}
+	return ""
+}
+
+func (s *ComposeService) getComposeEnvName(compose *schema.Compose) string {
+	if compose.Environment != nil {
+		return compose.Environment.Name
+	}
+	return ""
+}
+
+// sendComposeSuccessNotification 发送 Compose 部署成功通知
+func (s *ComposeService) sendComposeSuccessNotification(compose *schema.Compose) {
+	if s.notifier == nil {
+		return
+	}
+	orgID := s.getComposeOrgID(compose)
+	if orgID == "" {
+		return
+	}
+
+	projectName := s.getComposeProjectName(compose)
+	envName := s.getComposeEnvName(compose)
+
+	htmlBody, err := email.RenderBuildSuccess(email.BuildSuccessData{
+		ProjectName:     projectName,
+		ApplicationName: compose.Name,
+		ApplicationType: "compose",
+		EnvironmentName: envName,
+	})
+	if err != nil {
+		log.Printf("Failed to render compose success email: %v", err)
+		htmlBody = ""
+	}
+
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventAppDeploy,
+		Title:    "Build Successful",
+		Message:  fmt.Sprintf("Compose %s deployed successfully in project %s", compose.Name, projectName),
+		AppName:  compose.AppName,
+		HTMLBody: htmlBody,
+	})
+}
+
+// sendComposeErrorNotification 发送 Compose 构建失败通知
+func (s *ComposeService) sendComposeErrorNotification(composeID, errMsg string) {
+	if s.notifier == nil {
+		return
+	}
+
+	var compose schema.Compose
+	if err := s.db.Preload("Environment").Preload("Environment.Project").First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		return
+	}
+
+	orgID := s.getComposeOrgID(&compose)
+	if orgID == "" {
+		return
+	}
+
+	projectName := s.getComposeProjectName(&compose)
+	envName := s.getComposeEnvName(&compose)
+
+	htmlBody, err := email.RenderBuildFailed(email.BuildFailedData{
+		ProjectName:     projectName,
+		ApplicationName: compose.Name,
+		ApplicationType: "compose",
+		EnvironmentName: envName,
+		ErrorMessage:    errMsg,
+	})
+	if err != nil {
+		log.Printf("Failed to render compose error email: %v", err)
+		htmlBody = ""
+	}
+
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventAppBuildError,
+		Title:    "Build Failed",
+		Message:  fmt.Sprintf("Compose %s build failed: %s", compose.Name, errMsg),
+		AppName:  compose.AppName,
+		HTMLBody: htmlBody,
+	})
 }
 

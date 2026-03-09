@@ -18,6 +18,7 @@ import (
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/docker"
+	"github.com/dokploy/dokploy/internal/email"
 	"github.com/dokploy/dokploy/internal/handler"
 	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/queue"
@@ -66,8 +67,8 @@ func main() {
 	notifier := notify.NewNotifier(database)
 
 	// Initialize service layer
-	appSvc := service.NewApplicationService(database, dockerClient, cfg)
-	composeSvc := service.NewComposeService(database, dockerClient, cfg)
+	appSvc := service.NewApplicationService(database, dockerClient, cfg, notifier)
+	composeSvc := service.NewComposeService(database, dockerClient, cfg, notifier)
 	dbSvc := service.NewDatabaseService(database, dockerClient, cfg)
 	previewSvc := service.NewPreviewService(database, dockerClient, cfg, traefikMgr)
 
@@ -77,7 +78,7 @@ func main() {
 	defer backupSvc.Stop()
 
 	// Initialize schedule service
-	sched := scheduler.New(database, cfg)
+	sched := scheduler.New(database, cfg, notifier)
 	sched.InitSchedules()
 	defer sched.Stop()
 
@@ -142,7 +143,20 @@ func main() {
 			HandleDockerCleanup: func(ctx context.Context) error {
 				log.Println("Docker cleanup")
 				if dockerClient != nil {
-					return dockerClient.PruneSystem(ctx)
+					if err := dockerClient.PruneSystem(ctx); err != nil {
+						return err
+					}
+				}
+				// 发送 Docker 清理通知给管理员组织
+				var member schema.Member
+				if err := database.Where("role = ?", "owner").First(&member).Error; err == nil {
+					htmlBody, _ := email.RenderDockerCleanup(email.DockerCleanupData{})
+					notifier.Send(member.OrganizationID, notify.NotificationPayload{
+						Event:    notify.EventDockerCleanup,
+						Title:    "Docker Cleanup Completed",
+						Message:  "Docker cleanup has been completed successfully",
+						HTMLBody: htmlBody,
+					})
 				}
 				return nil
 			},

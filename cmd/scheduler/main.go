@@ -12,6 +12,7 @@ import (
 
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/scheduler"
 )
 
@@ -24,7 +25,8 @@ func main() {
 	}
 	defer database.Close()
 
-	sched := scheduler.New(database, cfg)
+	notifier := notify.NewNotifier(database)
+	sched := scheduler.New(database, cfg, notifier)
 	sched.InitSchedules()
 
 	log.Println("Dokploy scheduler started")

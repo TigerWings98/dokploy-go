@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,21 +17,24 @@ import (
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/docker"
+	"github.com/dokploy/dokploy/internal/email"
 	"github.com/dokploy/dokploy/internal/git"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/process"
 	"gorm.io/gorm"
 )
 
 // ApplicationService handles application business logic.
 type ApplicationService struct {
-	db     *db.DB
-	docker *docker.Client
-	cfg    *config.Config
+	db       *db.DB
+	docker   *docker.Client
+	cfg      *config.Config
+	notifier *notify.Notifier
 }
 
 // NewApplicationService creates a new ApplicationService.
-func NewApplicationService(database *db.DB, dockerClient *docker.Client, cfg *config.Config) *ApplicationService {
-	return &ApplicationService{db: database, docker: dockerClient, cfg: cfg}
+func NewApplicationService(database *db.DB, dockerClient *docker.Client, cfg *config.Config, notifier *notify.Notifier) *ApplicationService {
+	return &ApplicationService{db: database, docker: dockerClient, cfg: cfg, notifier: notifier}
 }
 
 // FindByID finds an application by ID with common preloads.
@@ -161,6 +165,9 @@ func (s *ApplicationService) runDeploy(app *schema.Application, deployment *sche
 
 	s.updateStatus(app.ApplicationID, schema.ApplicationStatusDone)
 	writeLog("Deployment completed successfully!")
+
+	// 发送部署成功通知（与 TS 版 sendBuildSuccessNotifications 对齐）
+	s.sendDeploySuccessNotification(app)
 }
 
 // runDeployRemote 远程部署：与 TS 版完全一致，将 clone + build 作为 SSH 命令发送
@@ -507,6 +514,9 @@ func (s *ApplicationService) runRebuild(app *schema.Application, deployment *sch
 		})
 	s.updateStatus(app.ApplicationID, schema.ApplicationStatusDone)
 	writeLog("Rebuild completed successfully!")
+
+	// 发送重建成功通知
+	s.sendDeploySuccessNotification(app)
 }
 
 // Reload restarts the Docker service without rebuilding.
@@ -639,6 +649,9 @@ func (s *ApplicationService) failDeployment(deploymentID, appID, errMsg string) 
 			"finishedAt":   now,
 		})
 	s.updateStatus(appID, schema.ApplicationStatusError)
+
+	// 发送构建失败通知（与 TS 版 sendBuildErrorNotifications 对齐）
+	s.sendDeployErrorNotification(appID, errMsg)
 }
 
 func safeStr(s *string) string {
@@ -697,4 +710,109 @@ func indexOf(s string, c byte) int {
 		}
 	}
 	return -1
+}
+
+// getAppOrgID 从应用关联链获取 organizationId: app → environment → project → organizationId
+func (s *ApplicationService) getAppOrgID(app *schema.Application) string {
+	if app.Environment != nil && app.Environment.Project != nil {
+		return app.Environment.Project.OrganizationID
+	}
+	// 回退查询
+	var env schema.Environment
+	if err := s.db.Preload("Project").First(&env, "\"environmentId\" = ?", app.EnvironmentID).Error; err != nil {
+		return ""
+	}
+	if env.Project != nil {
+		return env.Project.OrganizationID
+	}
+	return ""
+}
+
+// getAppProjectName 获取应用所属项目名
+func (s *ApplicationService) getAppProjectName(app *schema.Application) string {
+	if app.Environment != nil && app.Environment.Project != nil {
+		return app.Environment.Project.Name
+	}
+	return ""
+}
+
+// getAppEnvironmentName 获取应用所属环境名
+func (s *ApplicationService) getAppEnvironmentName(app *schema.Application) string {
+	if app.Environment != nil {
+		return app.Environment.Name
+	}
+	return ""
+}
+
+// sendDeploySuccessNotification 发送部署成功通知（与 TS 版 sendBuildSuccessNotifications 对齐）
+func (s *ApplicationService) sendDeploySuccessNotification(app *schema.Application) {
+	if s.notifier == nil {
+		return
+	}
+	orgID := s.getAppOrgID(app)
+	if orgID == "" {
+		return
+	}
+
+	projectName := s.getAppProjectName(app)
+	envName := s.getAppEnvironmentName(app)
+
+	htmlBody, err := email.RenderBuildSuccess(email.BuildSuccessData{
+		ProjectName:     projectName,
+		ApplicationName: app.Name,
+		ApplicationType: "application",
+		EnvironmentName: envName,
+	})
+	if err != nil {
+		log.Printf("Failed to render build success email: %v", err)
+		htmlBody = ""
+	}
+
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventAppDeploy,
+		Title:    "Build Successful",
+		Message:  fmt.Sprintf("Application %s deployed successfully in project %s", app.Name, projectName),
+		AppName:  app.AppName,
+		HTMLBody: htmlBody,
+	})
+}
+
+// sendDeployErrorNotification 发送构建失败通知（与 TS 版 sendBuildErrorNotifications 对齐）
+func (s *ApplicationService) sendDeployErrorNotification(appID, errMsg string) {
+	if s.notifier == nil {
+		return
+	}
+
+	var app schema.Application
+	if err := s.db.Preload("Environment").Preload("Environment.Project").First(&app, "\"applicationId\" = ?", appID).Error; err != nil {
+		return
+	}
+
+	orgID := s.getAppOrgID(&app)
+	if orgID == "" {
+		return
+	}
+
+	projectName := s.getAppProjectName(&app)
+	envName := s.getAppEnvironmentName(&app)
+
+	htmlBody, err := email.RenderBuildFailed(email.BuildFailedData{
+		ProjectName:     projectName,
+		ApplicationName: app.Name,
+		ApplicationType: "application",
+		EnvironmentName: envName,
+		ErrorMessage:    errMsg,
+	})
+	if err != nil {
+		log.Printf("Failed to render build error email: %v", err)
+		htmlBody = ""
+	}
+
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventAppBuildError,
+		Title:    "Build Failed",
+		Message:  fmt.Sprintf("Application %s build failed: %s", app.Name, errMsg),
+		AppName:  app.AppName,
+		HTMLBody: htmlBody,
+	})
 }

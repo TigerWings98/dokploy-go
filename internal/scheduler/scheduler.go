@@ -18,26 +18,30 @@ import (
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/email"
+	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/process"
 	"github.com/robfig/cron/v3"
 )
 
 // Scheduler manages cron-based scheduled tasks.
 type Scheduler struct {
-	cron *cron.Cron
-	db   *db.DB
-	cfg  *config.Config
-	mu   sync.Mutex
-	jobs map[string]cron.EntryID
+	cron     *cron.Cron
+	db       *db.DB
+	cfg      *config.Config
+	notifier *notify.Notifier
+	mu       sync.Mutex
+	jobs     map[string]cron.EntryID
 }
 
 // New creates a new Scheduler.
-func New(database *db.DB, cfg *config.Config) *Scheduler {
+func New(database *db.DB, cfg *config.Config, notifier *notify.Notifier) *Scheduler {
 	return &Scheduler{
-		cron: cron.New(),
-		db:   database,
-		cfg:  cfg,
-		jobs: make(map[string]cron.EntryID),
+		cron:     cron.New(),
+		db:       database,
+		cfg:      cfg,
+		notifier: notifier,
+		jobs:     make(map[string]cron.EntryID),
 	}
 }
 
@@ -420,6 +424,8 @@ func (s *Scheduler) initDockerCleanup() {
 					log.Printf("[Docker Cleanup] Local exec failed: %v: %s", err, string(output))
 				}
 			}
+			// 发送 Docker 清理通知给管理员组织
+			s.sendDockerCleanupNotification("")
 		})
 		log.Println("Docker cleanup cron registered for local server")
 	}
@@ -438,6 +444,7 @@ func (s *Scheduler) initDockerCleanup() {
 			Username:   srv.Username,
 			PrivateKey: srv.SSHKey.PrivateKey,
 		}
+		orgID := srv.OrganizationID
 		s.AddFunc("docker-cleanup-"+serverID, cleanupCron, func() {
 			log.Printf("[Docker Cleanup] Running for server %s", serverID)
 			for _, cmd := range cleanupCmds {
@@ -445,7 +452,33 @@ func (s *Scheduler) initDockerCleanup() {
 					log.Printf("[Docker Cleanup] Remote exec failed on %s: %v", serverID, err)
 				}
 			}
+			// 发送 Docker 清理通知
+			s.sendDockerCleanupNotification(orgID)
 		})
 		log.Printf("Docker cleanup cron registered for server %s", serverID)
 	}
+}
+
+// sendDockerCleanupNotification 发送 Docker 清理完成通知
+// orgID 为空时，查询管理员用户的 organizationId
+func (s *Scheduler) sendDockerCleanupNotification(orgID string) {
+	if s.notifier == nil {
+		return
+	}
+	if orgID == "" {
+		// 本地服务器清理：查询 owner 角色成员的组织 ID
+		var member schema.Member
+		if err := s.db.Where("role = ?", "owner").First(&member).Error; err != nil {
+			log.Printf("[Docker Cleanup] Failed to find admin org for notification: %v", err)
+			return
+		}
+		orgID = member.OrganizationID
+	}
+	htmlBody, _ := email.RenderDockerCleanup(email.DockerCleanupData{})
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventDockerCleanup,
+		Title:    "Docker Cleanup Completed",
+		Message:  "Docker cleanup has been completed successfully",
+		HTMLBody: htmlBody,
+	})
 }

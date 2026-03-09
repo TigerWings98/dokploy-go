@@ -15,6 +15,7 @@ import (
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/email"
 	"github.com/dokploy/dokploy/internal/notify"
 	"github.com/dokploy/dokploy/internal/process"
 	"github.com/robfig/cron/v3"
@@ -168,8 +169,17 @@ func (s *Service) RunBackup(backupID string) error {
 		return fmt.Errorf("backup not found: %w", err)
 	}
 
+	// 使用 defer 在出错时发送备份失败通知
+	var backupErr error
+	defer func() {
+		if backupErr != nil {
+			s.sendBackupNotification(&backup, "error", backupErr.Error())
+		}
+	}()
+
 	if backup.Destination == nil {
-		return fmt.Errorf("backup destination not configured")
+		backupErr = fmt.Errorf("backup destination not configured")
+		return backupErr
 	}
 
 	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05")
@@ -186,7 +196,8 @@ func (s *Service) RunBackup(backupID string) error {
 	switch backup.DatabaseType {
 	case schema.DatabaseTypePostgres:
 		if backup.Postgres == nil {
-			return fmt.Errorf("postgres instance not found")
+			backupErr = fmt.Errorf("postgres instance not found")
+			return backupErr
 		}
 		dumpCmd = fmt.Sprintf(
 			"docker exec $(docker ps -q -f name=%s) pg_dumpall -U %s | gzip > %s",
@@ -196,7 +207,8 @@ func (s *Service) RunBackup(backupID string) error {
 		server = backup.Postgres.Server
 	case schema.DatabaseTypeMySQL:
 		if backup.MySQL == nil {
-			return fmt.Errorf("mysql instance not found")
+			backupErr = fmt.Errorf("mysql instance not found")
+			return backupErr
 		}
 		dumpCmd = fmt.Sprintf(
 			"docker exec $(docker ps -q -f name=%s) mysqldump -u %s -p%s --all-databases | gzip > %s",
@@ -206,7 +218,8 @@ func (s *Service) RunBackup(backupID string) error {
 		server = backup.MySQL.Server
 	case schema.DatabaseTypeMariaDB:
 		if backup.MariaDB == nil {
-			return fmt.Errorf("mariadb instance not found")
+			backupErr = fmt.Errorf("mariadb instance not found")
+			return backupErr
 		}
 		dumpCmd = fmt.Sprintf(
 			"docker exec $(docker ps -q -f name=%s) mariadb-dump -u %s -p%s --all-databases | gzip > %s",
@@ -216,7 +229,8 @@ func (s *Service) RunBackup(backupID string) error {
 		server = backup.MariaDB.Server
 	case schema.DatabaseTypeMongo:
 		if backup.Mongo == nil {
-			return fmt.Errorf("mongo instance not found")
+			backupErr = fmt.Errorf("mongo instance not found")
+			return backupErr
 		}
 		dumpCmd = fmt.Sprintf(
 			"docker exec $(docker ps -q -f name=%s) mongodump --username %s --password %s --archive | gzip > %s",
@@ -225,7 +239,8 @@ func (s *Service) RunBackup(backupID string) error {
 		serverID = backup.Mongo.ServerID
 		server = backup.Mongo.Server
 	default:
-		return fmt.Errorf("unsupported database type for backup: %s", backup.DatabaseType)
+		backupErr = fmt.Errorf("unsupported database type for backup: %s", backup.DatabaseType)
+		return backupErr
 	}
 
 	// Execute dump (local or remote)
@@ -237,11 +252,13 @@ func (s *Service) RunBackup(backupID string) error {
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
 		if _, err := process.ExecAsyncRemote(conn, dumpCmd, nil); err != nil {
-			return fmt.Errorf("failed to create database dump: %w", err)
+			backupErr = fmt.Errorf("failed to create database dump: %w", err)
+			return backupErr
 		}
 	} else {
 		if _, err := process.ExecAsync(dumpCmd); err != nil {
-			return fmt.Errorf("failed to create database dump: %w", err)
+			backupErr = fmt.Errorf("failed to create database dump: %w", err)
+			return backupErr
 		}
 	}
 
@@ -261,11 +278,15 @@ func (s *Service) RunBackup(backupID string) error {
 
 	if _, err := process.ExecAsync(uploadCmd); err != nil {
 		os.Remove(dumpPath)
-		return fmt.Errorf("failed to upload backup: %w", err)
+		backupErr = fmt.Errorf("failed to upload backup: %w", err)
+		return backupErr
 	}
 
 	// Cleanup local dump file immediately
 	os.Remove(dumpPath)
+
+	// 发送备份成功通知（与 TS 版 sendDatabaseBackupNotifications 对齐）
+	s.sendBackupNotification(&backup, "success", "")
 
 	return nil
 }
@@ -285,8 +306,24 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 		return fmt.Errorf("volume backup not found: %w", err)
 	}
 
+	// 使用 defer 在出错时发送卷备份失败通知（与 TS v0.28.5 对齐，包裹在 try-catch 中防止级联失败）
+	var volumeErr error
+	defer func() {
+		if volumeErr != nil {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("Failed to send volume backup error notification: %v", r)
+					}
+				}()
+				s.sendVolumeBackupNotification(&vb, "error", volumeErr.Error())
+			}()
+		}
+	}()
+
 	if vb.Destination == nil {
-		return fmt.Errorf("volume backup destination not configured")
+		volumeErr = fmt.Errorf("volume backup destination not configured")
+		return volumeErr
 	}
 
 	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05")
@@ -316,11 +353,13 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
 		if _, err := process.ExecAsyncRemote(conn, backupCmd, nil); err != nil {
-			return fmt.Errorf("failed to create volume backup: %w", err)
+			volumeErr = fmt.Errorf("failed to create volume backup: %w", err)
+			return volumeErr
 		}
 	} else {
 		if _, err := process.ExecAsync(backupCmd); err != nil {
-			return fmt.Errorf("failed to create volume backup: %w", err)
+			volumeErr = fmt.Errorf("failed to create volume backup: %w", err)
+			return volumeErr
 		}
 	}
 
@@ -340,10 +379,22 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 
 	if _, err := process.ExecAsync(uploadCmd); err != nil {
 		os.Remove(backupPath)
-		return fmt.Errorf("failed to upload volume backup: %w", err)
+		volumeErr = fmt.Errorf("failed to upload volume backup: %w", err)
+		return volumeErr
 	}
 
 	os.Remove(backupPath)
+
+	// 发送卷备份成功通知（包裹在 try-catch 中防止级联失败，与 TS v0.28.5 对齐）
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Failed to send volume backup success notification: %v", r)
+			}
+		}()
+		s.sendVolumeBackupNotification(&vb, "success", "")
+	}()
+
 	return nil
 }
 
@@ -418,4 +469,105 @@ func (s *Service) RestoreVolumeBackup(volumeBackupID string, filename string) er
 	}
 
 	return nil
+}
+
+// sendBackupNotification 发送数据库备份通知（与 TS 版 sendDatabaseBackupNotifications 对齐）
+func (s *Service) sendBackupNotification(backup *schema.Backup, backupType, errMsg string) {
+	if s.notifier == nil {
+		return
+	}
+
+	// 获取 organizationId（通过 Destination 关联获取）
+	if backup.Destination == nil {
+		return
+	}
+	orgID := backup.Destination.OrganizationID
+	if orgID == "" {
+		return
+	}
+
+	appName := getServiceAppName(backup)
+	dbType := string(backup.DatabaseType)
+	if dbType == "mongo" {
+		dbType = "mongodb"
+	}
+
+	title := "Database Backup Successful"
+	message := fmt.Sprintf("Database backup for %s completed successfully", appName)
+	if backupType == "error" {
+		title = "Database Backup Failed"
+		message = fmt.Sprintf("Database backup for %s failed: %s", appName, errMsg)
+	}
+
+	htmlBody, err := email.RenderDatabaseBackup(email.DatabaseBackupData{
+		ApplicationName: appName,
+		DatabaseType:    dbType,
+		Type:            backupType,
+		ErrorMessage:    errMsg,
+	})
+	if err != nil {
+		log.Printf("Failed to render backup email: %v", err)
+		htmlBody = ""
+	}
+
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventDatabaseBackup,
+		Title:    title,
+		Message:  message,
+		AppName:  appName,
+		HTMLBody: htmlBody,
+	})
+}
+
+// sendVolumeBackupNotification 发送卷备份通知（与 TS 版 sendVolumeBackupNotifications 对齐）
+func (s *Service) sendVolumeBackupNotification(vb *schema.VolumeBackup, backupType, errMsg string) {
+	if s.notifier == nil {
+		return
+	}
+
+	// VolumeBackup 没有直接的 organizationId，通过关联的 Application/Compose 获取
+	var orgID string
+	if vb.Application != nil {
+		// app → environment → project → org
+		var env schema.Environment
+		if err := s.db.Preload("Project").First(&env, "\"environmentId\" = ?", vb.Application.EnvironmentID).Error; err == nil && env.Project != nil {
+			orgID = env.Project.OrganizationID
+		}
+	} else if vb.Compose != nil {
+		var env schema.Environment
+		if err := s.db.Preload("Project").First(&env, "\"environmentId\" = ?", vb.Compose.EnvironmentID).Error; err == nil && env.Project != nil {
+			orgID = env.Project.OrganizationID
+		}
+	}
+	if orgID == "" {
+		return
+	}
+
+	appName := getVolumeServiceAppName(vb)
+
+	title := "Volume Backup Successful"
+	message := fmt.Sprintf("Volume backup for %s completed successfully", appName)
+	if backupType == "error" {
+		title = "Volume Backup Failed"
+		message = fmt.Sprintf("Volume backup for %s failed: %s", appName, errMsg)
+	}
+
+	htmlBody, err := email.RenderVolumeBackup(email.VolumeBackupData{
+		ApplicationName: appName,
+		VolumeName:      vb.VolumeName,
+		Type:            backupType,
+		ErrorMessage:    errMsg,
+	})
+	if err != nil {
+		log.Printf("Failed to render volume backup email: %v", err)
+		htmlBody = ""
+	}
+
+	s.notifier.Send(orgID, notify.NotificationPayload{
+		Event:    notify.EventVolumeBackup,
+		Title:    title,
+		Message:  message,
+		AppName:  appName,
+		HTMLBody: htmlBody,
+	})
 }

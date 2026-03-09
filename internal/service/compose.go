@@ -345,12 +345,27 @@ echo "Repository cloned: ✅";`, projectPath, filepath.Dir(projectPath), branch,
 
 	envFilePath := filepath.Join(filepath.Dir(filepath.Join(projectPath, composePth)), ".env")
 
+	// 隔离部署：创建独立网络（stack 使用 overlay 驱动），部署后连接 Traefik
+	var networkCmd, networkConnectCmd string
+	if compose.IsolatedDeployment {
+		driverFlag := ""
+		if compose.ComposeType == schema.ComposeTypeStack {
+			driverFlag = "--driver overlay "
+		}
+		networkCmd = fmt.Sprintf(`docker network inspect %s >/dev/null 2>&1 || docker network create %s--attachable %s;`,
+			compose.AppName, driverFlag, compose.AppName)
+		networkConnectCmd = fmt.Sprintf(`docker network connect %s $(docker ps --filter "name=dokploy-traefik" -q) >/dev/null 2>&1 || true;`,
+			compose.AppName)
+	}
+
 	buildCmd := fmt.Sprintf(`set -e;
 touch %s;
 echo "%s" | base64 -d > "%s";
 cd "%s";
+%s
 docker %s 2>&1 || { echo "Error: ❌ Docker command failed"; exit 1; }
-echo "Docker Compose Deployed: ✅";`, envFilePath, encodedEnv, envFilePath, projectPath, dockerCmd)
+%s
+echo "Docker Compose Deployed: ✅";`, envFilePath, encodedEnv, envFilePath, projectPath, networkCmd, dockerCmd, networkConnectCmd)
 
 	writeLog("--- Running compose up on remote server ---")
 	buildWithLog := fmt.Sprintf("(%s) >> %s 2>&1", buildCmd, deployment.LogPath)
@@ -407,6 +422,17 @@ func (s *ComposeService) cloneComposeRepo(compose *schema.Compose, composeDir st
 }
 
 func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir string, writeLog func(string)) error {
+	// 隔离部署：创建独立网络（stack 使用 overlay 驱动）
+	if compose.IsolatedDeployment {
+		driverFlag := ""
+		if compose.ComposeType == schema.ComposeTypeStack {
+			driverFlag = "--driver overlay "
+		}
+		networkCmd := fmt.Sprintf("docker network inspect %s >/dev/null 2>&1 || docker network create %s--attachable %s",
+			compose.AppName, driverFlag, compose.AppName)
+		process.ExecAsyncStream(networkCmd, writeLog)
+	}
+
 	var cmd string
 
 	switch compose.ComposeType {
@@ -421,7 +447,18 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 	}
 
 	_, err := process.ExecAsyncStream(cmd, writeLog, process.WithDir(composeDir))
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 隔离部署：部署后连接 Traefik 到隔离网络
+	if compose.IsolatedDeployment {
+		connectCmd := fmt.Sprintf(`docker network connect %s $(docker ps --filter "name=dokploy-traefik" -q) 2>/dev/null || true`,
+			compose.AppName)
+		process.ExecAsyncStream(connectCmd, nil)
+	}
+
+	return nil
 }
 
 // Stop stops a compose project (与 TS 版一致：docker compose stop 或 docker stack rm)。

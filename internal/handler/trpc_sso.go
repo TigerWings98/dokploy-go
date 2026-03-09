@@ -6,6 +6,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/url"
 	"strings"
 
@@ -190,7 +191,11 @@ func (h *Handler) registerSSOTRPC(r procedureRegistry) {
 			return []string{}, nil
 		}
 		var owner schema.User
-		h.DB.First(&owner, "id = ?", ownerID)
+		// 添加错误处理：查询失败时返回空数组而非崩溃（与 TS v0.28.5 对齐）
+		if err := h.DB.First(&owner, "id = ?", ownerID).Error; err != nil {
+			log.Printf("Failed to fetch trusted origins for owner %s: %v", ownerID, err)
+			return []string{}, nil
+		}
 		origins := []string(owner.TrustedOrigins)
 		if origins == nil {
 			return []string{}, nil

@@ -341,7 +341,8 @@ func (s *Scheduler) finishDeployment(deploymentID string, status schema.Deployme
 		})
 }
 
-// removeOldDeployments 保留最近10条 schedule 部署记录，删除旧的（与 TS 版一致）
+// removeOldDeployments 保留最近10条 schedule 部署记录，删除旧的（与 TS v0.28.5 一致）
+// 每条记录独立 try-catch，防止单条删除失败阻塞其他清理
 func (s *Scheduler) removeOldDeployments(scheduleID string) {
 	var deployments []schema.Deployment
 	s.db.Where("\"scheduleId\" = ?", scheduleID).
@@ -349,10 +350,15 @@ func (s *Scheduler) removeOldDeployments(scheduleID string) {
 		Offset(10).
 		Find(&deployments)
 	for _, d := range deployments {
-		if d.LogPath != "" {
-			os.Remove(d.LogPath)
+		// 路径验证：防止误删根目录或空路径（与 TS v0.28.5 对齐）
+		if d.LogPath != "" && d.LogPath != "." {
+			if err := os.Remove(d.LogPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("Warning: failed to remove log file %s: %v", d.LogPath, err)
+			}
 		}
-		s.db.Delete(&d)
+		if err := s.db.Delete(&d).Error; err != nil {
+			log.Printf("Warning: failed to remove old deployment %s: %v", d.DeploymentID, err)
+		}
 	}
 }
 

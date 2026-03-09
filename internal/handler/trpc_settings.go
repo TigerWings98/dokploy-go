@@ -537,6 +537,83 @@ echo "$json_output"
 	}
 
 	r["settings.toggleDashboard"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			EnableDashboard bool    `json:"enableDashboard"`
+			ServerID        *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		if in.EnableDashboard {
+			// 检查端口 8080 是否被占用（双层检测：Docker 容器 + 主机级服务）
+			conflictInfo, err := checkPortInUse(8080, in.ServerID)
+			if err == nil && conflictInfo != "" {
+				return nil, &trpcErr{
+					message: fmt.Sprintf("Port 8080 is already in use by %s. Please stop the conflicting service or use a different port for the Traefik dashboard.", conflictInfo),
+					code:    "CONFLICT",
+					status:  409,
+				}
+			}
+		}
+
+		// 读取 Traefik 服务当前端口配置
+		serviceName := "dokploy-traefik"
+		portsCmd := fmt.Sprintf(`docker service inspect %s --format '{{range .Endpoint.Ports}}{{.TargetPort}}:{{.PublishedPort}}/{{.Protocol}} {{end}}'`, serviceName)
+		var portsOut string
+		if in.ServerID != nil {
+			conn := h.getSSHConn(*in.ServerID)
+			if conn != nil {
+				result, _ := process.ExecAsyncRemote(*conn, portsCmd, nil)
+				if result != nil {
+					portsOut = result.Stdout
+				}
+			}
+		} else {
+			result, _ := process.ExecAsync(portsCmd)
+			if result != nil {
+				portsOut = result.Stdout
+			}
+		}
+
+		// 解析当前端口列表，添加或移除 8080
+		var portSpecs []string
+		for _, p := range strings.Fields(strings.TrimSpace(portsOut)) {
+			if p == "" {
+				continue
+			}
+			// 移除已有的 8080
+			if strings.HasPrefix(p, "8080:") {
+				continue
+			}
+			portSpecs = append(portSpecs, p)
+		}
+
+		if in.EnableDashboard {
+			portSpecs = append(portSpecs, "8080:8080/tcp")
+		}
+
+		// 构建 --publish-add 参数更新服务
+		var publishArgs []string
+		// 先移除所有端口再重新添加
+		publishArgs = append(publishArgs, "--publish-rm 8080")
+		if in.EnableDashboard {
+			publishArgs = append(publishArgs, "--publish-add 8080:8080")
+		}
+
+		updateCmd := fmt.Sprintf("docker service update %s %s",
+			strings.Join(publishArgs, " "), serviceName)
+
+		// 异步执行以避免代理超时
+		go func() {
+			if in.ServerID != nil {
+				conn := h.getSSHConn(*in.ServerID)
+				if conn != nil {
+					process.ExecAsyncRemote(*conn, updateCmd, nil)
+				}
+			} else {
+				process.ExecAsync(updateCmd)
+			}
+		}()
+
 		return true, nil
 	}
 
@@ -662,5 +739,82 @@ func (h *Handler) execDockerCleanup(serverID *string, command string) {
 		if output, err := cmd.CombinedOutput(); err != nil {
 			log.Printf("[Docker Cleanup] Local exec failed: %v: %s", err, string(output))
 		}
+	}
+}
+
+// checkPortInUse 双层端口冲突检测（与 TS v0.28.5 checkPortInUse 一致）
+// 返回冲突描述（空字符串表示未占用）
+func checkPortInUse(port int, serverID *string) (string, error) {
+	// 层1：检查 Docker 容器是否占用端口
+	dockerCmd := fmt.Sprintf(
+		`docker ps -a --format '{{.Names}}' | grep -v '^dokploy-traefik$' | while read name; do docker port "$name" 2>/dev/null | grep -q ':%d' && echo "$name" && break; done || true`,
+		port,
+	)
+
+	var dockerOut string
+	if serverID != nil {
+		// TODO: 远程执行需要 SSH 连接，暂用本地
+		result, err := process.ExecAsync(dockerCmd)
+		if err != nil {
+			return "", err
+		}
+		if result != nil {
+			dockerOut = result.Stdout
+		}
+	} else {
+		result, err := process.ExecAsync(dockerCmd)
+		if err != nil {
+			return "", err
+		}
+		if result != nil {
+			dockerOut = result.Stdout
+		}
+	}
+
+	container := strings.TrimSpace(dockerOut)
+	if container != "" {
+		return fmt.Sprintf(`container "%s"`, container), nil
+	}
+
+	// 层2：检查主机级服务是否占用端口（通过 --net=host 容器检测）
+	hostCmd := fmt.Sprintf(
+		`docker run --rm --net=host busybox sh -c 'nc -z 0.0.0.0 %d 2>/dev/null && echo in_use || echo free'`,
+		port,
+	)
+
+	var hostOut string
+	if serverID != nil {
+		result, _ := process.ExecAsync(hostCmd)
+		if result != nil {
+			hostOut = result.Stdout
+		}
+	} else {
+		result, _ := process.ExecAsync(hostCmd)
+		if result != nil {
+			hostOut = result.Stdout
+		}
+	}
+
+	if strings.Contains(hostOut, "in_use") {
+		return "a host-level service", nil
+	}
+
+	return "", nil
+}
+
+// getSSHConn 从 serverID 获取 SSH 连接参数
+func (h *Handler) getSSHConn(serverID string) *process.SSHConnection {
+	var srv schema.Server
+	if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", serverID).Error; err != nil {
+		return nil
+	}
+	if srv.SSHKey == nil {
+		return nil
+	}
+	return &process.SSHConnection{
+		Host:       srv.IPAddress,
+		Port:       srv.Port,
+		Username:   srv.Username,
+		PrivateKey: srv.SSHKey.PrivateKey,
 	}
 }

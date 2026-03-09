@@ -48,6 +48,10 @@ type Compose struct {
 	// Suffix for compose project name
 	ComposeSuffix *string `gorm:"column:suffix;type:text" json:"suffix"`
 
+	// 隔离部署：为 compose 创建独立 Docker 网络
+	IsolatedDeployment       bool `gorm:"column:isolatedDeployment;not null;default:false" json:"isolatedDeployment"`
+	IsolatedDeploymentsVolume bool `gorm:"column:isolatedDeploymentsVolume;not null;default:false" json:"isolatedDeploymentsVolume"`
+
 	// Relations
 	Environment     *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
 	Server          *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`

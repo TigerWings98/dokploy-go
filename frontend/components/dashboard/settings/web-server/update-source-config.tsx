@@ -123,9 +123,10 @@ export const UpdateSourceConfig = () => {
 					toast.success("Connected! You are up to date.");
 				}
 			}
-		} catch (error) {
+		} catch (error: any) {
 			setTestResult(null);
-			toast.error("Connection test failed. Check your registry config.");
+			const msg = error?.message || "Connection test failed. Check your registry config.";
+			toast.error(msg);
 		}
 	};
 

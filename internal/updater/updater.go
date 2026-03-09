@@ -184,7 +184,7 @@ func (u *Updater) CheckUpdate() UpdateData {
 	}
 }
 
-// ApplyUpdate 执行更新：docker service update --force --image {image}:{version} {service}
+// ApplyUpdate 执行更新：先 docker pull 确保镜像存在，再 docker service update
 func (u *Updater) ApplyUpdate(version string) error {
 	if version == "" {
 		data := u.CheckUpdate()
@@ -197,9 +197,19 @@ func (u *Updater) ApplyUpdate(version string) error {
 	image := u.getImage()
 	serviceName := u.getServiceName()
 	imageRef := fmt.Sprintf("%s:%s", image, version)
-	log.Printf("[Updater] Applying update: docker service update --force --image %s %s", imageRef, serviceName)
 
-	cmd := exec.Command("docker", "service", "update", "--force", "--image", imageRef, serviceName)
+	// 先 docker pull，确保本地有镜像（Swarm manager 不共享 docker login 凭据）
+	log.Printf("[Updater] Pulling image: docker pull %s", imageRef)
+	pullCmd := exec.Command("docker", "pull", imageRef)
+	pullCmd.Stdout = os.Stdout
+	pullCmd.Stderr = os.Stderr
+	if err := pullCmd.Run(); err != nil {
+		return fmt.Errorf("failed to pull image %s: %w", imageRef, err)
+	}
+
+	// docker service update --force --with-registry-auth
+	log.Printf("[Updater] Applying update: docker service update --force --with-registry-auth --image %s %s", imageRef, serviceName)
+	cmd := exec.Command("docker", "service", "update", "--force", "--with-registry-auth", "--image", imageRef, serviceName)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -233,6 +243,44 @@ func (u *Updater) ReloadService() error {
 		}
 	}()
 	return nil
+}
+
+// TestConnection 测试 Registry 连通性，返回明确的成功/失败和 tag 列表
+func (u *Updater) TestConnection() (success bool, updateAvailable bool, latestVersion *string, err error) {
+	image := u.getImage()
+	if image == "" {
+		return false, false, nil, fmt.Errorf("update source not configured")
+	}
+
+	tags, err := u.listRegistryTags(image)
+	if err != nil {
+		return false, false, nil, fmt.Errorf("failed to connect to registry: %w", err)
+	}
+
+	if len(tags) == 0 {
+		return false, false, nil, fmt.Errorf("connected but no tags found, check authentication")
+	}
+
+	// 筛选 semver tags
+	var semverTags []string
+	for _, tag := range tags {
+		if isValidSemver(tag) {
+			semverTags = append(semverTags, tag)
+		}
+	}
+	if len(semverTags) == 0 {
+		return true, false, nil, nil
+	}
+
+	sort.Slice(semverTags, func(i, j int) bool {
+		return compareSemver(semverTags[i], semverTags[j]) > 0
+	})
+	latest := semverTags[0]
+
+	if compareSemver(latest, Version) <= 0 {
+		return true, false, &latest, nil
+	}
+	return true, true, &latest, nil
 }
 
 // --- Registry API ---

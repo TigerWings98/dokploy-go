@@ -679,11 +679,14 @@ echo "$json_output"
 		if h.Updater == nil {
 			return nil, &trpcErr{"Updater not available", "INTERNAL_SERVER_ERROR", 500}
 		}
-		data := h.Updater.CheckUpdate()
+		success, updateAvailable, latestVersion, err := h.Updater.TestConnection()
+		if err != nil {
+			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		}
 		return map[string]interface{}{
-			"success":         true,
-			"updateAvailable": data.UpdateAvailable,
-			"latestVersion":   data.LatestVersion,
+			"success":         success,
+			"updateAvailable": updateAvailable,
+			"latestVersion":   latestVersion,
 		}, nil
 	}
 

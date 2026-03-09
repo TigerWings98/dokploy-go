@@ -102,16 +102,17 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 	}
 
 	// backup.restoreBackupWithLogs
-	// 输入与 TS 版 apiRestoreBackup 一致：databaseId, databaseType, backupType, databaseName, backupFile, destinationId
+	// 输入与 TS 版 apiRestoreBackup 一致：databaseId, databaseType, backupType, databaseName, backupFile, destinationId, metadata
 	s["backup.restoreBackupWithLogs"] = func(c echo.Context, input json.RawMessage, emit chan<- interface{}) {
 		defer close(emit)
 		var in struct {
-			DatabaseID    string `json:"databaseId"`
-			DatabaseType  string `json:"databaseType"`
-			BackupType    string `json:"backupType"`
-			DatabaseName  string `json:"databaseName"`
-			BackupFile    string `json:"backupFile"`
-			DestinationID string `json:"destinationId"`
+			DatabaseID    string          `json:"databaseId"`
+			DatabaseType  string          `json:"databaseType"`
+			BackupType    string          `json:"backupType"`
+			DatabaseName  string          `json:"databaseName"`
+			BackupFile    string          `json:"backupFile"`
+			DestinationID string          `json:"destinationId"`
+			Metadata      json.RawMessage `json:"metadata"`
 			// 向后兼容旧格式
 			BackupID string `json:"backupId"`
 			FileName string `json:"fileName"`
@@ -125,17 +126,27 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 			return
 		}
 
-		// Web Server 恢复走独立路径（不需要 backupId，直接用 destinationId + backupFile）
-		if in.DatabaseType == "web-server" {
-			err := h.BackupSvc.RestoreWebServerBackup(in.DestinationID, in.BackupFile, func(log string) {
-				emit <- log
-			})
-			if err != nil {
+		emitFn := func(log string) { emit <- log }
+
+		// 按 backupType 和 databaseType 分发（与 TS 版 restoreBackupWithLogs 完全一致）
+		if in.BackupType == "compose" {
+			// Compose 恢复：使用 metadata 凭据 + compose container label
+			metadataStr := ""
+			if in.Metadata != nil {
+				metadataStr = string(in.Metadata)
+			}
+			if err := h.BackupSvc.RestoreComposeBackup(in.DatabaseID, in.DestinationID, in.DatabaseType, in.DatabaseName, in.BackupFile, metadataStr, emitFn); err != nil {
+				emit <- "Error: " + err.Error()
+				return
+			}
+		} else if in.DatabaseType == "web-server" {
+			// Web Server 恢复
+			if err := h.BackupSvc.RestoreWebServerBackup(in.DestinationID, in.BackupFile, emitFn); err != nil {
 				emit <- "Error: " + err.Error()
 				return
 			}
 		} else {
-			// 数据库/Compose 恢复走原有 RestoreBackup
+			// 数据库恢复（postgres/mysql/mariadb/mongo）
 			backupID := in.BackupID
 			fileName := in.FileName
 			if backupID == "" {

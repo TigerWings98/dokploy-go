@@ -7,10 +7,22 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
+	"gorm.io/gorm"
 )
+
+// rcloneFile 与 TS 版 RcloneFile 结构一致，用于 rclone lsjson 输出解析
+type rcloneFile struct {
+	Path   string            `json:"Path"`
+	Name   string            `json:"Name"`
+	Size   int64             `json:"Size"`
+	IsDir  bool              `json:"IsDir"`
+	Hashes map[string]string `json:"Hashes,omitempty"`
+}
 
 func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 	r["backup.one"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -19,8 +31,15 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		}
 		json.Unmarshal(input, &in)
 		var b schema.Backup
-		if err := h.DB.Preload("Destination").First(&b, "\"backupId\" = ?", in.BackupID).Error; err != nil {
+		if err := h.DB.Preload("Destination").
+			Preload("Deployments", func(db *gorm.DB) *gorm.DB {
+				return db.Order("\"createdAt\" DESC")
+			}).
+			First(&b, "\"backupId\" = ?", in.BackupID).Error; err != nil {
 			return nil, &trpcErr{"Backup not found", "NOT_FOUND", 404}
+		}
+		if b.Deployments == nil {
+			b.Deployments = []schema.Deployment{}
 		}
 		return b, nil
 	}
@@ -35,6 +54,8 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		if h.BackupSvc != nil && b.Enabled != nil && *b.Enabled {
 			h.BackupSvc.ScheduleBackup(b)
 		}
+		// 重新查询以包含 destination 关联（与 TS 版一致）
+		h.DB.Preload("Destination").First(&b, "\"backupId\" = ?", b.BackupID)
 		return b, nil
 	}
 
@@ -57,22 +78,121 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		id, _ := in["backupId"].(string)
 		delete(in, "backupId")
 		h.DB.Model(&schema.Backup{}).Where("\"backupId\" = ?", id).Updates(in)
+
+		// 重新调度 cron job（与 TS 版一致：enabled → remove + re-schedule，disabled → remove）
+		if h.BackupSvc != nil {
+			h.BackupSvc.RemoveBackup(id)
+			var updated schema.Backup
+			if err := h.DB.Preload("Destination").Preload("Compose").Preload("Postgres").Preload("MySQL").Preload("MariaDB").Preload("Mongo").
+				First(&updated, "\"backupId\" = ?", id).Error; err == nil {
+				if updated.Enabled != nil && *updated.Enabled {
+					h.BackupSvc.ScheduleBackup(updated)
+				}
+			}
+		}
 		return true, nil
 	}
 
+	// listBackupFiles: 输入与 TS 版一致 {destinationId, search, serverId}
+	// 使用 rclone lsjson 列出 S3 文件，返回 RcloneFile[] 数组
 	r["backup.listBackupFiles"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			BackupID string `json:"backupId"`
+			DestinationID string `json:"destinationId"`
+			Search        string `json:"search"`
+			ServerID      string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
-		if h.BackupSvc != nil {
-			files, err := h.BackupSvc.ListBackupFiles(in.BackupID)
-			if err != nil {
-				return []string{}, nil
-			}
-			return files, nil
+
+		var dest schema.Destination
+		if err := h.DB.First(&dest, "\"destinationId\" = ?", in.DestinationID).Error; err != nil {
+			return []rcloneFile{}, nil
 		}
-		return []string{}, nil
+
+		rcloneFlags := getRcloneFlagsForDest(&dest)
+		bucketPath := fmt.Sprintf(":s3:%s", dest.Bucket)
+
+		// 解析搜索路径：支持目录导航（如 "appName/prefix/"）
+		var baseDir, searchTerm string
+		lastSlash := strings.LastIndex(in.Search, "/")
+		if lastSlash != -1 {
+			baseDir = normalizeListPath(in.Search[:lastSlash+1])
+			searchTerm = in.Search[lastSlash+1:]
+		} else {
+			searchTerm = in.Search
+		}
+
+		searchPath := bucketPath
+		if baseDir != "" {
+			searchPath = fmt.Sprintf("%s/%s", bucketPath, baseDir)
+		}
+
+		listCmd := fmt.Sprintf(`rclone lsjson %s "%s" --no-mimetype --no-modtime 2>/dev/null`, rcloneFlags, searchPath)
+
+		var stdout string
+		if in.ServerID != "" {
+			// 远程服务器执行
+			var server schema.Server
+			if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
+				return []rcloneFile{}, nil
+			}
+			if server.SSHKey != nil {
+				conn := process.SSHConnection{
+					Host:       server.IPAddress,
+					Port:       server.Port,
+					Username:   server.Username,
+					PrivateKey: server.SSHKey.PrivateKey,
+				}
+				result, err := process.ExecAsyncRemote(conn, listCmd, nil)
+				if err != nil {
+					return []rcloneFile{}, nil
+				}
+				stdout = result.Stdout
+			}
+		} else {
+			result, err := process.ExecAsync(listCmd)
+			if err != nil {
+				return []rcloneFile{}, nil
+			}
+			if result != nil {
+				stdout = result.Stdout
+			}
+		}
+
+		var files []rcloneFile
+		if err := json.Unmarshal([]byte(stdout), &files); err != nil {
+			return []rcloneFile{}, nil
+		}
+
+		// 如果有 baseDir，给每个文件路径加上前缀
+		if baseDir != "" {
+			for i := range files {
+				files[i].Path = baseDir + files[i].Path
+			}
+		}
+
+		// 按搜索词过滤
+		if searchTerm != "" {
+			lower := strings.ToLower(searchTerm)
+			var filtered []rcloneFile
+			for _, f := range files {
+				if strings.Contains(strings.ToLower(f.Path), lower) {
+					filtered = append(filtered, f)
+					if len(filtered) >= 100 {
+						break
+					}
+				}
+			}
+			if filtered == nil {
+				filtered = []rcloneFile{}
+			}
+			return filtered, nil
+		}
+
+		// 限制 100 个
+		if len(files) > 100 {
+			files = files[:100]
+		}
+		return files, nil
 	}
 
 	// Manual backup endpoints - all use the same RunBackup logic
@@ -185,4 +305,30 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		}
 		return true, nil
 	}
+}
+
+// getRcloneFlagsForDest 构建 rclone S3 认证参数（与 backup 包的 getRcloneFlags 逻辑一致）
+func getRcloneFlagsForDest(dest *schema.Destination) string {
+	flags := []string{
+		fmt.Sprintf(`--s3-access-key-id="%s"`, dest.AccessKey),
+		fmt.Sprintf(`--s3-secret-access-key="%s"`, dest.SecretAccessKey),
+		fmt.Sprintf(`--s3-region="%s"`, dest.Region),
+		fmt.Sprintf(`--s3-endpoint="%s"`, dest.Endpoint),
+		"--s3-no-check-bucket",
+		"--s3-force-path-style",
+	}
+	if dest.Provider != nil && *dest.Provider != "" {
+		flags = append([]string{fmt.Sprintf(`--s3-provider="%s"`, *dest.Provider)}, flags...)
+	}
+	return strings.Join(flags, " ")
+}
+
+// normalizeListPath 规范化 S3 列表路径，确保以 / 结尾且无前导 /
+func normalizeListPath(path string) string {
+	p := strings.TrimSpace(path)
+	p = strings.TrimLeft(p, "/")
+	if p != "" && !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
 }

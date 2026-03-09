@@ -1,10 +1,11 @@
 // Input: rclone CLI, Docker SDK (exec 恢复命令), S3 文件路径
-// Output: RestoreBackup (数据库恢复), RestoreWebServerBackup (全服务器恢复), ListBackupFiles (列出备份文件)
-// Role: 数据库/Web Server 备份恢复服务，从 S3 下载备份文件并恢复到本地或远程服务器
+// Output: RestoreBackup (数据库恢复), RestoreComposeBackup (Compose 恢复), RestoreWebServerBackup (全服务器恢复), ListBackupFiles (列出备份文件)
+// Role: 数据库/Compose/Web Server 备份恢复服务，从 S3 下载备份文件并恢复到本地或远程服务器
 // 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package backup
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -141,6 +142,151 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 		}
 	}
 
+	return nil
+}
+
+// restoreMetadata 用于解析恢复请求中的 metadata JSON（与 TS 版 apiRestoreBackup.metadata 一致）
+type restoreMetadata struct {
+	ServiceName string `json:"serviceName"`
+	Postgres    *struct {
+		DatabaseUser string `json:"databaseUser"`
+	} `json:"postgres"`
+	MariaDB *struct {
+		DatabaseUser     string `json:"databaseUser"`
+		DatabasePassword string `json:"databasePassword"`
+	} `json:"mariadb"`
+	Mongo *struct {
+		DatabaseUser     string `json:"databaseUser"`
+		DatabasePassword string `json:"databasePassword"`
+	} `json:"mongo"`
+	MySQL *struct {
+		DatabaseRootPassword string `json:"databaseRootPassword"`
+	} `json:"mysql"`
+}
+
+// RestoreComposeBackup 恢复 Compose 类型的备份。
+// 与 TS 版 restoreComposeBackup 完全一致：从 metadata 提取凭据，用 compose label 查找容器。
+func (s *Service) RestoreComposeBackup(composeID string, destinationID string, databaseType string, databaseName string, backupFile string, metadataJSON string, emit func(string)) error {
+	var compose schema.Compose
+	if err := s.db.Preload("Server").Preload("Server.SSHKey").First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
+		return fmt.Errorf("compose not found: %w", err)
+	}
+
+	if databaseType == "web-server" {
+		return nil // TS 版也直接 return
+	}
+
+	var dest schema.Destination
+	if err := s.db.First(&dest, "\"destinationId\" = ?", destinationID).Error; err != nil {
+		return fmt.Errorf("destination not found: %w", err)
+	}
+
+	rcloneFlags := getRcloneFlags(&dest)
+	bucketPath := fmt.Sprintf(":s3:%s", dest.Bucket)
+	backupPath := fmt.Sprintf("%s/%s", bucketPath, backupFile)
+
+	// 解析 metadata
+	var meta restoreMetadata
+	if metadataJSON != "" {
+		json.Unmarshal([]byte(metadataJSON), &meta)
+	}
+
+	// 构建 rclone 命令（Mongo 特殊处理：用 rclone copy 下载到临时目录）
+	isMongo := databaseType == "mongo"
+	rcloneCommand := fmt.Sprintf(`rclone cat %s "%s" | gunzip`, rcloneFlags, backupPath)
+	if isMongo {
+		rcloneCommand = fmt.Sprintf(`rclone copy %s "%s"`, rcloneFlags, backupPath)
+	}
+
+	// 构建恢复命令
+	var restoreCommand string
+	switch databaseType {
+	case "postgres":
+		user := ""
+		if meta.Postgres != nil {
+			user = meta.Postgres.DatabaseUser
+		}
+		restoreCommand = fmt.Sprintf(
+			`docker exec -i $CONTAINER_ID sh -c "pg_restore -U '%s' -d %s -O --clean --if-exists"`,
+			user, databaseName,
+		)
+	case "mysql":
+		pass := ""
+		if meta.MySQL != nil {
+			pass = meta.MySQL.DatabaseRootPassword
+		}
+		restoreCommand = fmt.Sprintf(
+			`docker exec -i $CONTAINER_ID sh -c "mysql -u root -p'%s' %s"`,
+			pass, databaseName,
+		)
+	case "mariadb":
+		user, pass := "", ""
+		if meta.MariaDB != nil {
+			user = meta.MariaDB.DatabaseUser
+			pass = meta.MariaDB.DatabasePassword
+		}
+		restoreCommand = fmt.Sprintf(
+			`docker exec -i $CONTAINER_ID sh -c "mariadb -u '%s' -p'%s' %s"`,
+			user, pass, databaseName,
+		)
+	case "mongo":
+		user, pass := "", ""
+		if meta.Mongo != nil {
+			user = meta.Mongo.DatabaseUser
+			pass = meta.Mongo.DatabasePassword
+		}
+		restoreCommand = fmt.Sprintf(
+			`docker exec -i $CONTAINER_ID sh -c "mongorestore --username '%s' --password '%s' --authenticationDatabase admin --db %s --archive --drop"`,
+			user, pass, databaseName,
+		)
+	default:
+		return fmt.Errorf("unsupported database type for compose restore: %s", databaseType)
+	}
+
+	// 容器查找：使用 compose label（与 TS 版 getComposeSearchCommand 一致）
+	serviceName := meta.ServiceName
+	composeType := string(compose.ComposeType)
+	containerSearch := getComposeContainerCommand(compose.AppName, serviceName, composeType)
+
+	// 组装完整命令
+	var fullCmd string
+	if isMongo {
+		tempDir := "/tmp/dokploy-restore"
+		baseName := filepath.Base(backupFile)
+		decompressedName := strings.TrimSuffix(baseName, ".gz")
+		fullCmd = fmt.Sprintf(
+			`CONTAINER_ID=$(%s) && rm -rf %s && mkdir -p %s && %s %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
+			containerSearch, tempDir, tempDir, rcloneCommand, tempDir, tempDir, baseName, restoreCommand, decompressedName, tempDir,
+		)
+	} else {
+		fullCmd = fmt.Sprintf(
+			`CONTAINER_ID=$(%s) && %s | %s`,
+			containerSearch, rcloneCommand, restoreCommand,
+		)
+	}
+
+	emit("Starting restore...")
+	emit(fmt.Sprintf("Backup path: %s", backupPath))
+	emit(fmt.Sprintf("Executing command: %s", fullCmd))
+
+	// 执行（本地或远程 SSH）
+	if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
+		conn := process.SSHConnection{
+			Host:       compose.Server.IPAddress,
+			Port:       compose.Server.Port,
+			Username:   compose.Server.Username,
+			PrivateKey: compose.Server.SSHKey.PrivateKey,
+		}
+		if _, err := process.ExecAsyncRemote(conn, fullCmd, nil); err != nil {
+			return fmt.Errorf("failed to restore compose backup: %w", err)
+		}
+	} else {
+		if _, err := process.ExecAsync(fullCmd); err != nil {
+			return fmt.Errorf("failed to restore compose backup: %w", err)
+		}
+	}
+
+	emit("Restore completed successfully!")
 	return nil
 }
 

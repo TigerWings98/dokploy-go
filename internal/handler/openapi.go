@@ -152,7 +152,7 @@ func (h *Handler) GenerateOpenAPIDocument() map[string]interface{} {
 		"info": map[string]interface{}{
 			"title":       "Dokploy API",
 			"description": "Endpoints for dokploy",
-			"version":     "v0.28.3",
+			"version":     "v0.28.5",
 		},
 		"paths": paths,
 		"components": map[string]interface{}{
@@ -175,7 +175,7 @@ func isQueryAction(action string) bool {
 	queryPrefixes := []string{
 		"get", "one", "all", "list", "by", "read", "check", "have",
 		"load", "show", "find", "fetch", "search", "count", "health",
-		"templates", "tags",
+		"templates", "tags", "session",
 	}
 	for _, prefix := range queryPrefixes {
 		if strings.HasPrefix(action, prefix) || action == prefix {

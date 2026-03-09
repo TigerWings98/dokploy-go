@@ -46,12 +46,12 @@ func (h *Handler) registerOrganizationTRPC(r procedureRegistry) {
 	}
 
 	r["organization.active"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		member, err := h.getDefaultMember(c)
-		if err != nil {
+		session := mw.GetSession(c)
+		if session == nil || session.ActiveOrganizationID == nil || *session.ActiveOrganizationID == "" {
 			return nil, nil
 		}
 		var org schema.Organization
-		if err := h.DB.First(&org, "id = ?", member.OrganizationID).Error; err != nil {
+		if err := h.DB.First(&org, "id = ?", *session.ActiveOrganizationID).Error; err != nil {
 			return nil, nil
 		}
 		return org, nil

@@ -306,7 +306,7 @@ func (h *Handler) ReloadTraefik(c echo.Context) error {
 func (h *Handler) GetDokployVersion(c echo.Context) error {
 	version := os.Getenv("DOKPLOY_VERSION")
 	if version == "" {
-		version = "canary"
+		version = "v0.28.5"
 	}
 	return c.JSON(http.StatusOK, version)
 }

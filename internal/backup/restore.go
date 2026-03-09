@@ -18,6 +18,7 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 	var backup schema.Backup
 	if err := s.db.
 		Preload("Destination").
+		Preload("Compose").
 		Preload("Postgres").
 		Preload("Postgres.Server").
 		Preload("Postgres.Server.SSHKey").
@@ -52,8 +53,10 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
 	)
 
-	downloadCmd := fmt.Sprintf("%s rclone copy s3:%s/%s/%s %s",
-		rcloneEnv, dest.Bucket, backup.Prefix, filename, tmpDir)
+	// S3 路径包含 appName 子目录，与上传路径保持一致
+	appName := getServiceAppName(&backup)
+	downloadCmd := fmt.Sprintf("%s rclone copy s3:%s/%s/%s/%s %s",
+		rcloneEnv, dest.Bucket, appName, backup.Prefix, filename, tmpDir)
 
 	if _, err := process.ExecAsync(downloadCmd); err != nil {
 		return fmt.Errorf("failed to download backup: %w", err)
@@ -100,7 +103,7 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 			return fmt.Errorf("mongo instance not found")
 		}
 		restoreCmd = fmt.Sprintf(
-			"gunzip -c %s | docker exec -i $(docker ps -q -f name=%s) mongorestore --username %s --password %s --archive",
+			"gunzip -c %s | docker exec -i $(docker ps -q -f name=%s) mongorestore --username %s --password %s --archive --drop",
 			localPath, backup.Mongo.AppName, backup.Mongo.DatabaseUser, backup.Mongo.DatabasePassword,
 		)
 		serverID = backup.Mongo.ServerID
@@ -132,7 +135,7 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 // ListBackupFiles lists available backup files from S3 for a backup config.
 func (s *Service) ListBackupFiles(backupID string) ([]string, error) {
 	var backup schema.Backup
-	if err := s.db.Preload("Destination").First(&backup, "\"backupId\" = ?", backupID).Error; err != nil {
+	if err := s.db.Preload("Destination").Preload("Compose").Preload("Postgres").Preload("MySQL").Preload("MariaDB").Preload("Mongo").First(&backup, "\"backupId\" = ?", backupID).Error; err != nil {
 		return nil, fmt.Errorf("backup not found: %w", err)
 	}
 
@@ -148,7 +151,9 @@ func (s *Service) ListBackupFiles(backupID string) ([]string, error) {
 		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
 	)
 
-	listCmd := fmt.Sprintf("%s rclone lsf s3:%s/%s/", rcloneEnv, dest.Bucket, backup.Prefix)
+	// S3 路径包含 appName 子目录
+	appName := getServiceAppName(&backup)
+	listCmd := fmt.Sprintf("%s rclone lsf s3:%s/%s/%s/", rcloneEnv, dest.Bucket, appName, backup.Prefix)
 
 	result, err := process.ExecAsync(listCmd)
 	if err != nil {

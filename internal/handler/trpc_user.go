@@ -443,6 +443,26 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		return map[string]interface{}{}, nil
 	}
 
+	r["user.session"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		user := mw.GetUser(c)
+		session := mw.GetSession(c)
+		if user == nil {
+			return nil, &trpcErr{"Unauthorized", "UNAUTHORIZED", 401}
+		}
+		activeOrgID := ""
+		if session != nil && session.ActiveOrganizationID != nil {
+			activeOrgID = *session.ActiveOrganizationID
+		}
+		return map[string]interface{}{
+			"user": map[string]interface{}{
+				"id": user.ID,
+			},
+			"session": map[string]interface{}{
+				"activeOrganizationId": activeOrgID,
+			},
+		}, nil
+	}
+
 	r["user.checkUserOrganizations"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		user := mw.GetUser(c)
 		if user == nil {

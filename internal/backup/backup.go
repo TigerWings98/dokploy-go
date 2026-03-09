@@ -106,11 +106,52 @@ func (s *Service) RemoveBackup(backupID string) {
 	}
 }
 
+// getServiceAppName 返回备份对应的服务 appName，用于 S3 路径前缀。
+// 如果是 Compose 类型，且有 serviceName，则返回 composeAppName_serviceName。
+func getServiceAppName(backup *schema.Backup) string {
+	if backup.Compose != nil && backup.Compose.AppName != "" {
+		if backup.ServiceName != nil && *backup.ServiceName != "" {
+			return backup.Compose.AppName + "_" + *backup.ServiceName
+		}
+		return backup.Compose.AppName
+	}
+	// 按优先级尝试各数据库服务的 appName
+	if backup.Postgres != nil && backup.Postgres.AppName != "" {
+		return backup.Postgres.AppName
+	}
+	if backup.MySQL != nil && backup.MySQL.AppName != "" {
+		return backup.MySQL.AppName
+	}
+	if backup.MariaDB != nil && backup.MariaDB.AppName != "" {
+		return backup.MariaDB.AppName
+	}
+	if backup.Mongo != nil && backup.Mongo.AppName != "" {
+		return backup.Mongo.AppName
+	}
+	return backup.AppName
+}
+
+// getVolumeServiceAppName 返回卷备份对应的服务 appName，用于 S3 路径前缀。
+// 如果是 Compose 类型且有 serviceName，则返回 composeAppName_serviceName。
+func getVolumeServiceAppName(vb *schema.VolumeBackup) string {
+	if vb.Compose != nil && vb.Compose.AppName != "" {
+		if vb.ServiceName != nil && *vb.ServiceName != "" {
+			return vb.Compose.AppName + "_" + *vb.ServiceName
+		}
+		return vb.Compose.AppName
+	}
+	if vb.Application != nil && vb.Application.AppName != "" {
+		return vb.Application.AppName
+	}
+	return vb.AppName
+}
+
 // RunBackup executes a backup for the given backup configuration.
 func (s *Service) RunBackup(backupID string) error {
 	var backup schema.Backup
 	if err := s.db.
 		Preload("Destination").
+		Preload("Compose").
 		Preload("Postgres").
 		Preload("Postgres.Server").
 		Preload("Postgres.Server.SSHKey").
@@ -213,8 +254,10 @@ func (s *Service) RunBackup(backupID string) error {
 		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
 	)
 
-	uploadCmd := fmt.Sprintf("%s rclone copy %s s3:%s/%s",
-		rcloneEnv, dumpPath, dest.Bucket, backup.Prefix)
+	// S3 路径包含 appName 子目录，便于按服务分类组织备份文件
+	appName := getServiceAppName(&backup)
+	uploadCmd := fmt.Sprintf("%s rclone copy %s s3:%s/%s/%s",
+		rcloneEnv, dumpPath, dest.Bucket, appName, backup.Prefix)
 
 	if _, err := process.ExecAsync(uploadCmd); err != nil {
 		os.Remove(dumpPath)
@@ -290,8 +333,10 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
 	)
 
-	uploadCmd := fmt.Sprintf("%s rclone copy %s s3:%s/%s",
-		rcloneEnv, backupPath, dest.Bucket, vb.AppName)
+	// S3 路径包含服务 appName 子目录（Compose 类型会包含 serviceName）
+	s3AppName := getVolumeServiceAppName(&vb)
+	uploadCmd := fmt.Sprintf("%s rclone copy %s s3:%s/%s/%s",
+		rcloneEnv, backupPath, dest.Bucket, s3AppName, vb.Prefix)
 
 	if _, err := process.ExecAsync(uploadCmd); err != nil {
 		os.Remove(backupPath)
@@ -334,8 +379,10 @@ func (s *Service) RestoreVolumeBackup(volumeBackupID string, filename string) er
 		dest.AccessKey, dest.SecretAccessKey, dest.Region, dest.Endpoint,
 	)
 
-	downloadCmd := fmt.Sprintf("%s rclone copy s3:%s/%s/%s %s",
-		rcloneEnv, dest.Bucket, vb.AppName, filename, tmpDir)
+	// S3 路径包含服务 appName 子目录，与上传路径保持一致
+	s3AppName := getVolumeServiceAppName(&vb)
+	downloadCmd := fmt.Sprintf("%s rclone copy s3:%s/%s/%s/%s %s",
+		rcloneEnv, dest.Bucket, s3AppName, vb.Prefix, filename, tmpDir)
 
 	if _, err := process.ExecAsync(downloadCmd); err != nil {
 		return fmt.Errorf("failed to download volume backup: %w", err)

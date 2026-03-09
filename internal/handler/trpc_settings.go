@@ -83,11 +83,11 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.getReleaseTag"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]string{"releaseTag": "canary"}, nil
+		return map[string]string{"releaseTag": "v0.28.5"}, nil
 	}
 
 	r["settings.getDokployVersion"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return "canary", nil
+		return "v0.28.5", nil
 	}
 
 	r["settings.health"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

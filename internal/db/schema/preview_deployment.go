@@ -28,9 +28,9 @@ type PreviewDeployment struct {
 	DomainID              *string           `gorm:"column:domainId;type:text" json:"domainId"`
 
 	// Relations
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:PreviewDeploymentID" json:"deployments"`
-	Domains     []Domain     `gorm:"foreignKey:PreviewDeploymentID" json:"domains"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:PreviewDeploymentID;references:PreviewDeploymentID" json:"deployments"`
+	Domains     []Domain     `gorm:"foreignKey:PreviewDeploymentID;references:PreviewDeploymentID" json:"domains"`
 }
 
 func (PreviewDeployment) TableName() string { return "preview_deployments" }
@@ -56,7 +56,7 @@ type Rollback struct {
 	ApplicationID string `gorm:"column:applicationId;type:text;not null" json:"applicationId"`
 	DeploymentID  string `gorm:"column:deploymentId;type:text" json:"deploymentId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
 }
 
 func (Rollback) TableName() string { return "rollback" }
@@ -90,10 +90,10 @@ type Schedule struct {
 	ServerID       *string `gorm:"column:serverId;type:text" json:"serverId"`
 	UserID         *string `gorm:"column:userId;type:text" json:"userId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:ScheduleID" json:"deployments"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:ScheduleID;references:ScheduleID" json:"deployments"`
 }
 
 func (Schedule) TableName() string { return "schedule" }

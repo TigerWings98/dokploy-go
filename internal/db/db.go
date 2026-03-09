@@ -29,7 +29,6 @@ func Connect(dsn string) (*DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logLevel),
 		// 禁止 GORM 把字段名转成 snake_case，因为数据库用的是 camelCase 列名
-		// 例如 SSHKeyID 默认会被转成 ssh_key_id，但实际列名是 sshKeyId
 		NamingStrategy: schema.NamingStrategy{NoLowerCase: true},
 	})
 	if err != nil {

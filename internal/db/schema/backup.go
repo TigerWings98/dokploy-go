@@ -23,8 +23,8 @@ type Destination struct {
 	CreatedAt      string  `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	OrganizationID string  `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	Backups      []Backup      `gorm:"foreignKey:DestinationID" json:"backups"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
+	Backups      []Backup      `gorm:"foreignKey:DestinationID;references:DestinationID" json:"backups"`
 }
 
 func (Destination) TableName() string { return "destination" }
@@ -54,13 +54,13 @@ type Backup struct {
 	MongoID       *string      `gorm:"column:mongoId;type:text" json:"mongoId"`
 	RedisID       *string      `gorm:"column:redisId;type:text" json:"redisId"`
 
-	Destination *Destination `gorm:"foreignKey:DestinationID" json:"destination,omitempty"`
-	Postgres    *Postgres    `gorm:"foreignKey:PostgresID" json:"postgres,omitempty"`
-	MySQL       *MySQL       `gorm:"foreignKey:MySQLID" json:"mysql,omitempty"`
-	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID" json:"mariadb,omitempty"`
-	Mongo       *Mongo       `gorm:"foreignKey:MongoID" json:"mongo,omitempty"`
-	Redis       *Redis       `gorm:"foreignKey:RedisID" json:"redis,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:BackupID" json:"deployments"`
+	Destination *Destination `gorm:"foreignKey:DestinationID;references:DestinationID" json:"destination,omitempty"`
+	Postgres    *Postgres    `gorm:"foreignKey:PostgresID;references:PostgresID" json:"postgres,omitempty"`
+	MySQL       *MySQL       `gorm:"foreignKey:MySQLID;references:MySQLID" json:"mysql,omitempty"`
+	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID;references:MariaDBID" json:"mariadb,omitempty"`
+	Mongo       *Mongo       `gorm:"foreignKey:MongoID;references:MongoID" json:"mongo,omitempty"`
+	Redis       *Redis       `gorm:"foreignKey:RedisID;references:RedisID" json:"redis,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:BackupID;references:BackupID" json:"deployments"`
 }
 
 func (Backup) TableName() string { return "backup" }
@@ -98,15 +98,15 @@ type VolumeBackup struct {
 	CreatedAt      string  `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	DestinationID  string  `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Postgres    *Postgres    `gorm:"foreignKey:PostgresID" json:"postgres,omitempty"`
-	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID" json:"mariadb,omitempty"`
-	Mongo       *Mongo       `gorm:"foreignKey:MongoID" json:"mongo,omitempty"`
-	MySQL       *MySQL       `gorm:"foreignKey:MySQLID" json:"mysql,omitempty"`
-	Redis       *Redis       `gorm:"foreignKey:RedisID" json:"redis,omitempty"`
-	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
-	Destination *Destination `gorm:"foreignKey:DestinationID" json:"destination,omitempty"`
-	Deployments []Deployment `gorm:"foreignKey:VolumeBackupID" json:"deployments"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Postgres    *Postgres    `gorm:"foreignKey:PostgresID;references:PostgresID" json:"postgres,omitempty"`
+	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID;references:MariaDBID" json:"mariadb,omitempty"`
+	Mongo       *Mongo       `gorm:"foreignKey:MongoID;references:MongoID" json:"mongo,omitempty"`
+	MySQL       *MySQL       `gorm:"foreignKey:MySQLID;references:MySQLID" json:"mysql,omitempty"`
+	Redis       *Redis       `gorm:"foreignKey:RedisID;references:RedisID" json:"redis,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
+	Destination *Destination `gorm:"foreignKey:DestinationID;references:DestinationID" json:"destination,omitempty"`
+	Deployments []Deployment `gorm:"foreignKey:VolumeBackupID;references:VolumeBackupID" json:"deployments"`
 }
 
 func (VolumeBackup) TableName() string { return "volume_backup" }

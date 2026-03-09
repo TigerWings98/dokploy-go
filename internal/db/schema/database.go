@@ -57,10 +57,10 @@ type Postgres struct {
 	SwarmConfig
 
 	// Relations
-	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:PostgresID" json:"mounts"`
-	Backups     []Backup     `gorm:"foreignKey:PostgresID" json:"backups"`
+	Environment *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:PostgresID;references:PostgresID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:PostgresID;references:PostgresID" json:"backups"`
 }
 
 func (Postgres) TableName() string              { return "postgres" }
@@ -106,10 +106,10 @@ type MySQL struct {
 
 	SwarmConfig
 
-	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:MySQLID" json:"mounts"`
-	Backups     []Backup     `gorm:"foreignKey:MySQLID" json:"backups"`
+	Environment *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:MySQLID;references:MySQLID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:MySQLID;references:MySQLID" json:"backups"`
 }
 
 func (MySQL) TableName() string            { return "mysql" }
@@ -155,10 +155,10 @@ type MariaDB struct {
 
 	SwarmConfig
 
-	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:MariaDBID" json:"mounts"`
-	Backups     []Backup     `gorm:"foreignKey:MariaDBID" json:"backups"`
+	Environment *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:MariaDBID;references:MariaDBID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:MariaDBID;references:MariaDBID" json:"backups"`
 }
 
 func (MariaDB) TableName() string              { return "mariadb" }
@@ -203,10 +203,10 @@ type Mongo struct {
 
 	SwarmConfig
 
-	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:MongoID" json:"mounts"`
-	Backups     []Backup     `gorm:"foreignKey:MongoID" json:"backups"`
+	Environment *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:MongoID;references:MongoID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:MongoID;references:MongoID" json:"backups"`
 }
 
 func (Mongo) TableName() string              { return "mongo" }
@@ -249,10 +249,10 @@ type Redis struct {
 
 	SwarmConfig
 
-	Environment *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Server      *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Mounts      []Mount      `gorm:"foreignKey:RedisID" json:"mounts"`
-	Backups     []Backup     `gorm:"foreignKey:RedisID" json:"backups"`
+	Environment *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Server      *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Mounts      []Mount      `gorm:"foreignKey:RedisID;references:RedisID" json:"mounts"`
+	Backups     []Backup     `gorm:"foreignKey:RedisID;references:RedisID" json:"backups"`
 }
 
 func (Redis) TableName() string              { return "redis" }

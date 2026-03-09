@@ -49,18 +49,18 @@ type Compose struct {
 	ComposeSuffix *string `gorm:"column:suffix;type:text" json:"suffix"`
 
 	// Relations
-	Environment     *Environment `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Server          *Server      `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	Deployments     []Deployment `gorm:"foreignKey:ComposeID" json:"deployments"`
-	Domains         []Domain     `gorm:"foreignKey:ComposeID" json:"domains"`
-	Mounts          []Mount      `gorm:"foreignKey:ComposeID" json:"mounts"`
-	Security        []Security   `gorm:"foreignKey:ComposeID" json:"security"`
-	Redirects       []Redirect   `gorm:"foreignKey:ComposeID" json:"redirects"`
-	Github          *Github      `gorm:"foreignKey:GithubID" json:"github,omitempty"`
-	Gitlab          *Gitlab      `gorm:"foreignKey:GitlabID" json:"gitlab,omitempty"`
-	Gitea           *Gitea       `gorm:"foreignKey:GiteaID" json:"gitea,omitempty"`
-	Bitbucket       *Bitbucket   `gorm:"foreignKey:BitbucketID" json:"bitbucket,omitempty"`
-	CustomGitSSHKey *SSHKey      `gorm:"foreignKey:CustomGitSSHKeyID" json:"customGitSSHKey,omitempty"`
+	Environment     *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Server          *Server      `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	Deployments     []Deployment `gorm:"foreignKey:ComposeID;references:ComposeID" json:"deployments"`
+	Domains         []Domain     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"domains"`
+	Mounts          []Mount      `gorm:"foreignKey:ComposeID;references:ComposeID" json:"mounts"`
+	Security        []Security   `gorm:"foreignKey:ComposeID;references:ComposeID" json:"security"`
+	Redirects       []Redirect   `gorm:"foreignKey:ComposeID;references:ComposeID" json:"redirects"`
+	Github          *Github      `gorm:"foreignKey:GithubID;references:GithubID" json:"github,omitempty"`
+	Gitlab          *Gitlab      `gorm:"foreignKey:GitlabID;references:GitlabID" json:"gitlab,omitempty"`
+	Gitea           *Gitea       `gorm:"foreignKey:GiteaID;references:GiteaID" json:"gitea,omitempty"`
+	Bitbucket       *Bitbucket   `gorm:"foreignKey:BitbucketID;references:BitbucketID" json:"bitbucket,omitempty"`
+	CustomGitSSHKey *SSHKey      `gorm:"foreignKey:CustomGitSSHKeyID;references:SSHKeyID" json:"customGitSSHKey,omitempty"`
 }
 
 func (Compose) TableName() string { return "compose" }

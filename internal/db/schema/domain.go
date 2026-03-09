@@ -30,9 +30,9 @@ type Domain struct {
 	PreviewDeploymentID *string       `gorm:"column:previewDeploymentId;type:text" json:"previewDeploymentId"`
 
 	// Relations
-	Application       *Application       `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Compose           *Compose           `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
-	PreviewDeployment *PreviewDeployment `gorm:"foreignKey:PreviewDeploymentID" json:"previewDeployment,omitempty"`
+	Application       *Application       `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Compose           *Compose           `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
+	PreviewDeployment *PreviewDeployment `gorm:"foreignKey:PreviewDeploymentID;references:PreviewDeploymentID" json:"previewDeployment,omitempty"`
 }
 
 func (Domain) TableName() string { return "domain" }

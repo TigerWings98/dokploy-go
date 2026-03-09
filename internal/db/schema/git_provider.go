@@ -20,12 +20,12 @@ type GitProvider struct {
 	OrganizationID string          `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 	UserID         string          `gorm:"column:userId;type:text;not null" json:"userId"`
 
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	User         *User         `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	Github       *Github       `gorm:"foreignKey:GitProviderID" json:"github,omitempty"`
-	Gitlab       *Gitlab       `gorm:"foreignKey:GitProviderID" json:"gitlab,omitempty"`
-	Bitbucket    *Bitbucket    `gorm:"foreignKey:GitProviderID" json:"bitbucket,omitempty"`
-	Gitea        *Gitea        `gorm:"foreignKey:GitProviderID" json:"gitea,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
+	User         *User         `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
+	Github       *Github       `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"github,omitempty"`
+	Gitlab       *Gitlab       `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitlab,omitempty"`
+	Bitbucket    *Bitbucket    `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"bitbucket,omitempty"`
+	Gitea        *Gitea        `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitea,omitempty"`
 }
 
 func (GitProvider) TableName() string { return "git_provider" }
@@ -52,8 +52,8 @@ type Github struct {
 	GithubWebhookSecret *string `gorm:"column:githubWebhookSecret;type:text" json:"githubWebhookSecret"`
 	GitProviderID   string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
-	GitProvider  *GitProvider  `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
-	Applications []Application `gorm:"foreignKey:GithubID" json:"applications"`
+	GitProvider  *GitProvider  `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitProvider,omitempty"`
+	Applications []Application `gorm:"foreignKey:GithubID;references:GithubID" json:"applications"`
 }
 
 func (Github) TableName() string { return "github" }
@@ -79,7 +79,7 @@ type Gitlab struct {
 	ExpiresAt         *int    `gorm:"column:expiresAt" json:"expiresAt"`
 	GitProviderID     string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
-	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
+	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitProvider,omitempty"`
 }
 
 func (Gitlab) TableName() string { return "gitlab" }
@@ -101,7 +101,7 @@ type Bitbucket struct {
 	BitbucketWorkspaceName *string `gorm:"column:bitbucketWorkspaceName;type:text" json:"bitbucketWorkspaceName"`
 	GitProviderID          string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
-	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
+	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitProvider,omitempty"`
 }
 
 func (Bitbucket) TableName() string { return "bitbucket" }
@@ -128,7 +128,7 @@ type Gitea struct {
 	LastAuthenticatedAt *int    `gorm:"column:lastAuthenticatedAt" json:"lastAuthenticatedAt"`
 	GitProviderID       string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
-	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID" json:"gitProvider,omitempty"`
+	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitProvider,omitempty"`
 }
 
 func (Gitea) TableName() string { return "gitea" }

@@ -31,13 +31,13 @@ type Mount struct {
 	ComposeID     *string   `gorm:"column:composeId;type:text" json:"composeId"`
 
 	// Relations
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Postgres    *Postgres    `gorm:"foreignKey:PostgresID" json:"postgres,omitempty"`
-	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID" json:"mariadb,omitempty"`
-	Mongo       *Mongo       `gorm:"foreignKey:MongoID" json:"mongo,omitempty"`
-	MySQL       *MySQL       `gorm:"foreignKey:MySQLID" json:"mysql,omitempty"`
-	Redis       *Redis       `gorm:"foreignKey:RedisID" json:"redis,omitempty"`
-	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Postgres    *Postgres    `gorm:"foreignKey:PostgresID;references:PostgresID" json:"postgres,omitempty"`
+	MariaDB     *MariaDB     `gorm:"foreignKey:MariaDBID;references:MariaDBID" json:"mariadb,omitempty"`
+	Mongo       *Mongo       `gorm:"foreignKey:MongoID;references:MongoID" json:"mongo,omitempty"`
+	MySQL       *MySQL       `gorm:"foreignKey:MySQLID;references:MySQLID" json:"mysql,omitempty"`
+	Redis       *Redis       `gorm:"foreignKey:RedisID;references:RedisID" json:"redis,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
 }
 
 func (Mount) TableName() string { return "mount" }

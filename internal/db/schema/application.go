@@ -136,26 +136,26 @@ type Application struct {
 	BuildRegistryID    *string `gorm:"column:buildRegistryId;type:text" json:"buildRegistryId"`
 
 	// Relations
-	Environment        *Environment        `gorm:"foreignKey:EnvironmentID" json:"environment,omitempty"`
-	Deployments        []Deployment        `gorm:"foreignKey:ApplicationID" json:"deployments"`
-	Domains            []Domain            `gorm:"foreignKey:ApplicationID" json:"domains"`
-	Mounts             []Mount             `gorm:"foreignKey:ApplicationID" json:"mounts"`
-	Redirects          []Redirect          `gorm:"foreignKey:ApplicationID" json:"redirects"`
-	Security           []Security          `gorm:"foreignKey:ApplicationID" json:"security"`
-	Ports              []Port              `gorm:"foreignKey:ApplicationID" json:"ports"`
-	Registry           *Registry           `gorm:"foreignKey:RegistryID" json:"registry,omitempty"`
-	BuildRegistry      *Registry           `gorm:"foreignKey:BuildRegistryID" json:"buildRegistry,omitempty"`
-	RollbackRegistry   *Registry           `gorm:"foreignKey:RollbackRegistryID" json:"rollbackRegistry,omitempty"`
-	Server             *Server             `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	BuildServer        *Server             `gorm:"foreignKey:BuildServerID" json:"buildServer,omitempty"`
-	PreviewDeployments []PreviewDeployment `gorm:"foreignKey:ApplicationID" json:"previewDeployments"`
+	Environment        *Environment        `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`
+	Deployments        []Deployment        `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"deployments"`
+	Domains            []Domain            `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"domains"`
+	Mounts             []Mount             `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"mounts"`
+	Redirects          []Redirect          `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"redirects"`
+	Security           []Security          `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"security"`
+	Ports              []Port              `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"ports"`
+	Registry           *Registry           `gorm:"foreignKey:RegistryID;references:RegistryID" json:"registry,omitempty"`
+	BuildRegistry      *Registry           `gorm:"foreignKey:BuildRegistryID;references:RegistryID" json:"buildRegistry,omitempty"`
+	RollbackRegistry   *Registry           `gorm:"foreignKey:RollbackRegistryID;references:RegistryID" json:"rollbackRegistry,omitempty"`
+	Server             *Server             `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	BuildServer        *Server             `gorm:"foreignKey:BuildServerID;references:ServerID" json:"buildServer,omitempty"`
+	PreviewDeployments []PreviewDeployment `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"previewDeployments"`
 
 	// Git provider relations
-	Github          *Github    `gorm:"foreignKey:GithubID" json:"github,omitempty"`
-	Gitlab          *Gitlab    `gorm:"foreignKey:GitlabID" json:"gitlab,omitempty"`
-	Gitea           *Gitea     `gorm:"foreignKey:GiteaID" json:"gitea,omitempty"`
-	Bitbucket       *Bitbucket `gorm:"foreignKey:BitbucketID" json:"bitbucket,omitempty"`
-	CustomGitSSHKey *SSHKey    `gorm:"foreignKey:CustomGitSSHKeyID" json:"customGitSSHKey,omitempty"`
+	Github          *Github    `gorm:"foreignKey:GithubID;references:GithubID" json:"github,omitempty"`
+	Gitlab          *Gitlab    `gorm:"foreignKey:GitlabID;references:GitlabID" json:"gitlab,omitempty"`
+	Gitea           *Gitea     `gorm:"foreignKey:GiteaID;references:GiteaID" json:"gitea,omitempty"`
+	Bitbucket       *Bitbucket `gorm:"foreignKey:BitbucketID;references:BitbucketID" json:"bitbucket,omitempty"`
+	CustomGitSSHKey *SSHKey    `gorm:"foreignKey:CustomGitSSHKeyID;references:SSHKeyID" json:"customGitSSHKey,omitempty"`
 }
 
 func (Application) TableName() string { return "application" }

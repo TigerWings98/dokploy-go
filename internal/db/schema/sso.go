@@ -24,8 +24,8 @@ type SSOProvider struct {
 	CreatedAt      time.Time `gorm:"column:created_at;not null;autoCreateTime" json:"createdAt"`
 
 	// Relations
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	User         *User         `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
+	User         *User         `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
 }
 
 func (SSOProvider) TableName() string { return "sso_provider" }

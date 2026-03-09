@@ -32,8 +32,8 @@ type Patch struct {
 	ApplicationID *string   `gorm:"column:applicationId;type:text" json:"applicationId"`
 	ComposeID     *string   `gorm:"column:composeId;type:text" json:"composeId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
 }
 
 func (Patch) TableName() string { return "patch" }

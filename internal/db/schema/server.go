@@ -32,10 +32,10 @@ type Server struct {
 	MetricsConfig       *MetricsConfigJSON `gorm:"column:metricsConfig;type:jsonb" json:"metricsConfig"`
 
 	// Relations
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
 	SSHKey       *SSHKey       `gorm:"foreignKey:SSHKeyID;references:SSHKeyID" json:"sshKey,omitempty"`
-	Applications []Application `gorm:"foreignKey:ServerID" json:"applications"`
-	Deployments  []Deployment  `gorm:"foreignKey:ServerID" json:"deployments"`
+	Applications []Application `gorm:"foreignKey:ServerID;references:ServerID" json:"applications"`
+	Deployments  []Deployment  `gorm:"foreignKey:ServerID;references:ServerID" json:"deployments"`
 }
 
 func (Server) TableName() string { return "server" }

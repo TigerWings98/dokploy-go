@@ -20,7 +20,7 @@ type Port struct {
 	CreatedAt     string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	ApplicationID *string      `gorm:"column:applicationId;type:text" json:"applicationId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
 }
 
 func (Port) TableName() string { return "port" }
@@ -44,8 +44,8 @@ type Security struct {
 	ApplicationID *string `gorm:"column:applicationId;type:text" json:"applicationId"`
 	ComposeID     *string `gorm:"column:composeId;type:text" json:"composeId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
 }
 
 func (Security) TableName() string { return "security" }
@@ -71,8 +71,8 @@ type Redirect struct {
 	ApplicationID *string `gorm:"column:applicationId;type:text" json:"applicationId"`
 	ComposeID     *string `gorm:"column:composeId;type:text" json:"composeId"`
 
-	Application *Application `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Compose     *Compose     `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
+	Application *Application `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Compose     *Compose     `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
 }
 
 func (Redirect) TableName() string { return "redirect" }
@@ -100,7 +100,7 @@ type Registry struct {
 	SelfHostedImage *string     `gorm:"column:selfHostedImage;type:text" json:"selfHostedImage"`
 	OrganizationID string       `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
 }
 
 func (Registry) TableName() string { return "registry" }
@@ -126,7 +126,7 @@ type SSHKey struct {
 	PrivateKey     string  `gorm:"column:privateKey;type:text;not null" json:"privateKey"`
 	OrganizationID string  `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
 }
 
 func (SSHKey) TableName() string { return "ssh-key" }
@@ -153,8 +153,8 @@ type Certificate struct {
 	ServerID        *string `gorm:"column:serverId;type:text" json:"serverId"`
 	OrganizationID  string  `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	Server       *Server       `gorm:"foreignKey:ServerID" json:"server,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
+	Server       *Server       `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
 }
 
 func (Certificate) TableName() string { return "certificate" }

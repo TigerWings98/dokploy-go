@@ -55,7 +55,7 @@ type Notification struct {
 	Lark         *NotifLark     `gorm:"foreignKey:LarkID;references:LarkID" json:"lark,omitempty"`
 	Pushover     *NotifPushover `gorm:"foreignKey:PushoverID;references:PushoverID" json:"pushover,omitempty"`
 	Teams        *NotifTeams    `gorm:"foreignKey:TeamsID;references:TeamsID" json:"teams,omitempty"`
-	Organization *Organization  `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	Organization *Organization  `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
 }
 
 func (Notification) TableName() string { return "notification" }

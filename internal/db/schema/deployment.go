@@ -35,11 +35,11 @@ type Deployment struct {
 	BuildServerID       *string           `gorm:"column:buildServerId;type:text" json:"buildServerId"`
 
 	// Relations
-	Application       *Application       `gorm:"foreignKey:ApplicationID" json:"application,omitempty"`
-	Compose           *Compose           `gorm:"foreignKey:ComposeID" json:"compose,omitempty"`
-	Server            *Server            `gorm:"foreignKey:ServerID" json:"server,omitempty"`
-	BuildServer       *Server            `gorm:"foreignKey:BuildServerID" json:"buildServer,omitempty"`
-	PreviewDeployment *PreviewDeployment `gorm:"foreignKey:PreviewDeploymentID" json:"previewDeployment,omitempty"`
+	Application       *Application       `gorm:"foreignKey:ApplicationID;references:ApplicationID" json:"application,omitempty"`
+	Compose           *Compose           `gorm:"foreignKey:ComposeID;references:ComposeID" json:"compose,omitempty"`
+	Server            *Server            `gorm:"foreignKey:ServerID;references:ServerID" json:"server,omitempty"`
+	BuildServer       *Server            `gorm:"foreignKey:BuildServerID;references:ServerID" json:"buildServer,omitempty"`
+	PreviewDeployment *PreviewDeployment `gorm:"foreignKey:PreviewDeploymentID;references:PreviewDeploymentID" json:"previewDeployment,omitempty"`
 }
 
 func (Deployment) TableName() string { return "deployment" }

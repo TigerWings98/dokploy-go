@@ -40,9 +40,9 @@ type User struct {
 	TrustedOrigins           StringArray `gorm:"column:trustedOrigins;type:text[]" json:"trustedOrigins"`
 
 	// Relations
-	Account       *Account       `gorm:"foreignKey:UserID" json:"account,omitempty"`
-	Organizations []Organization `gorm:"foreignKey:OwnerID" json:"organizations"`
-	APIKeys       []APIKey       `gorm:"foreignKey:UserID" json:"apiKeys"`
+	Account       *Account       `gorm:"foreignKey:UserID;references:ID" json:"account,omitempty"`
+	Organizations []Organization `gorm:"foreignKey:OwnerID;references:ID" json:"organizations"`
+	APIKeys       []APIKey       `gorm:"foreignKey:UserID;references:ID" json:"apiKeys"`
 }
 
 func (User) TableName() string { return "user" }
@@ -82,7 +82,7 @@ type Account struct {
 	ConfirmationExpiresAt *string    `gorm:"column:confirmationExpiresAt;type:text" json:"confirmationExpiresAt"`
 
 	// Relations
-	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	User *User `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
 }
 
 func (Account) TableName() string { return "account" }
@@ -120,10 +120,10 @@ type Organization struct {
 	OwnerID   string    `gorm:"column:owner_id;type:text;not null" json:"ownerId"`
 
 	// Relations
-	Owner    *User      `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
-	Members  []Member   `gorm:"foreignKey:OrganizationID" json:"members"`
-	Projects []Project  `gorm:"foreignKey:OrganizationID" json:"projects"`
-	Servers  []Server   `gorm:"foreignKey:OrganizationID" json:"servers"`
+	Owner    *User      `gorm:"foreignKey:OwnerID;references:ID" json:"owner,omitempty"`
+	Members  []Member   `gorm:"foreignKey:OrganizationID;references:ID" json:"members"`
+	Projects []Project  `gorm:"foreignKey:OrganizationID;references:ID" json:"projects"`
+	Servers  []Server   `gorm:"foreignKey:OrganizationID;references:ID" json:"servers"`
 }
 
 func (Organization) TableName() string { return "organization" }
@@ -160,8 +160,8 @@ type Member struct {
 	AccessedServices        StringArray `gorm:"column:accesedServices;type:text[];not null;default:ARRAY[]::text[]" json:"accessedServices"`
 
 	// Relations
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
-	User         *User         `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
+	User         *User         `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
 }
 
 func (Member) TableName() string { return "member" }
@@ -186,7 +186,7 @@ type Invitation struct {
 	CreatedAt      time.Time  `gorm:"column:created_at;not null" json:"createdAt"`
 
 	// Relations
-	Organization *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
 }
 
 func (Invitation) TableName() string { return "invitation" }
@@ -198,7 +198,7 @@ type TwoFactor struct {
 	BackupCodes string `gorm:"column:backup_codes;type:text;not null" json:"backupCodes"`
 	UserID      string `gorm:"column:user_id;type:text;not null" json:"userId"`
 
-	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	User *User `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
 }
 
 func (TwoFactor) TableName() string { return "two_factor" }
@@ -227,7 +227,7 @@ type APIKey struct {
 	Permissions        *string    `gorm:"column:permissions;type:text" json:"permissions"`
 	Metadata           *string    `gorm:"column:metadata;type:text" json:"metadata"`
 
-	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	User *User `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
 }
 
 func (APIKey) TableName() string { return "apikey" }
@@ -244,7 +244,7 @@ type Session struct {
 	UserID                 string  `gorm:"column:user_id;type:text;not null" json:"userId"`
 	ActiveOrganizationID   *string `gorm:"column:active_organization_id;type:text" json:"activeOrganizationId"`
 
-	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	User *User `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
 }
 
 func (Session) TableName() string { return "session" }

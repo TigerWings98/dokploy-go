@@ -94,6 +94,7 @@ export const UpdateSourceConfig = () => {
 				toast.success("Update source config saved");
 				await refetch();
 				setTestResult(null);
+				setIsOpen(false);
 			})
 			.catch(() => {
 				toast.error("Error saving update source config");
@@ -174,7 +175,7 @@ export const UpdateSourceConfig = () => {
 									<FormLabel>Registry Image</FormLabel>
 									<FormControl>
 										<Input
-											placeholder="e.g. crpi-xxx.cn-shanghai.personal.cr.aliyuncs.com/tigerking/dokploy-go"
+											placeholder="e.g. ghcr.io/your-org/dokploy-go"
 											{...field}
 										/>
 									</FormControl>

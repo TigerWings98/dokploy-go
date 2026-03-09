@@ -43,7 +43,7 @@ func (w *WebServerSettings) BeforeCreate(tx *gorm.DB) error {
 // 以后新增 Go 专属配置直接加列即可，和 TS 版 webServerSettings 同样的模式。
 type GoConfig struct {
 	ID            string    `gorm:"column:id;primaryKey;type:text;default:'default'" json:"id"`
-	RegistryImage string    `gorm:"column:registry_image;type:text;not null;default:''" json:"registryImage"` // 镜像名（不含 tag），如 crpi-xxx/tigerking/dokploy-go
+	RegistryImage string    `gorm:"column:registry_image;type:text;not null;default:''" json:"registryImage"` // 镜像名（不含 tag），如 ghcr.io/your-org/dokploy-go
 	RegistryID    *string   `gorm:"column:registry_id;type:text" json:"registryId"`                          // 关联已有的 Registry 记录（用其 username/password 认证）
 	ServiceName   string    `gorm:"column:service_name;type:text;not null;default:'dokploy'" json:"serviceName"`
 	CreatedAt     time.Time `gorm:"column:created_at;not null;default:now()" json:"createdAt"`

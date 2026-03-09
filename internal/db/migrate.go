@@ -84,7 +84,7 @@ func (d *DB) AutoMigrateFrom(migrationsDir string) error {
 
 	// 查询最后执行的 migration 时间戳（与 Drizzle 一致的逻辑）
 	var lastMigration struct {
-		CreatedAt *int64
+		CreatedAt *int64 `gorm:"column:created_at"`
 	}
 	d.DB.Raw(`SELECT created_at FROM drizzle."__drizzle_migrations" ORDER BY created_at DESC LIMIT 1`).Scan(&lastMigration)
 

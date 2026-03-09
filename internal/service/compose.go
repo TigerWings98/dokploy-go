@@ -5,9 +5,11 @@
 package service
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/config"
@@ -129,23 +131,67 @@ func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.
 
 	writeLog(fmt.Sprintf("Rebuilding compose %s (%s) - skipping source clone", compose.Name, compose.AppName))
 
-	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
-	os.MkdirAll(composeDir, 0755)
+	isRemote := compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil
 
-	// Raw 类型仍然写入最新的 compose file
-	if compose.SourceType == schema.SourceTypeComposeRaw {
-		composePath := filepath.Join(composeDir, "docker-compose.yml")
-		writeLog("Writing compose file from raw content")
-		if err := os.WriteFile(composePath, []byte(compose.ComposeFile), 0644); err != nil {
+	if isRemote {
+		// 远程 rebuild：与 TS 版一致，raw 类型仍然写入最新文件，然后 compose up
+		conn := process.SSHConnection{
+			Host:       compose.Server.IPAddress,
+			Port:       compose.Server.Port,
+			Username:   compose.Server.Username,
+			PrivateKey: compose.Server.SSHKey.PrivateKey,
+		}
+
+		projectPath := fmt.Sprintf("/etc/dokploy/compose/%s/code", compose.AppName)
+
+		// Raw 类型：重新写入 compose file
+		if compose.SourceType == schema.SourceTypeComposeRaw {
+			encoded := base64Encode(compose.ComposeFile)
+			writeCmd := fmt.Sprintf(`mkdir -p %s && echo "%s" | base64 -d > "%s/docker-compose.yml"`, projectPath, encoded, projectPath)
+			_, err := process.ExecAsyncRemote(conn, writeCmd, writeLog)
+			if err != nil {
+				s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+				return
+			}
+		}
+
+		// Compose up
+		composePth := "docker-compose.yml"
+		if compose.ComposePath != "" {
+			composePth = compose.ComposePath
+		}
+		var dockerCmd string
+		switch compose.ComposeType {
+		case schema.ComposeTypeStack:
+			dockerCmd = fmt.Sprintf("stack deploy -c %s %s --prune --with-registry-auth", composePth, compose.AppName)
+		default:
+			dockerCmd = fmt.Sprintf("compose -p %s -f %s up -d --build --remove-orphans", compose.AppName, composePth)
+		}
+
+		buildCmd := fmt.Sprintf(`set -e; cd "%s" && docker %s 2>&1`, projectPath, dockerCmd)
+		_, err := process.ExecAsyncRemote(conn, buildCmd, writeLog)
+		if err != nil {
 			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
 			return
 		}
-	}
+	} else {
+		// 本地 rebuild
+		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
+		os.MkdirAll(composeDir, 0755)
 
-	// 直接 compose up（不 clone）
-	if err := s.composeUp(compose, composeDir, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
-		return
+		if compose.SourceType == schema.SourceTypeComposeRaw {
+			composePath := filepath.Join(composeDir, "docker-compose.yml")
+			writeLog("Writing compose file from raw content")
+			if err := os.WriteFile(composePath, []byte(compose.ComposeFile), 0644); err != nil {
+				s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+				return
+			}
+		}
+
+		if err := s.composeUpLocal(compose, composeDir, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+			return
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -173,23 +219,30 @@ func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.D
 
 	writeLog(fmt.Sprintf("Starting compose deployment for %s (%s)", compose.Name, compose.AppName))
 
-	// Prepare compose directory
-	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
-	os.MkdirAll(composeDir, 0755)
+	isRemote := compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil
 
-	// Step 1: Prepare source (clone or write raw compose file)
-	if err := s.prepareComposeSource(compose, composeDir, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
-		return
+	if isRemote {
+		// 远程部署：与 TS 版一致，将整个流水线（准备源码 + compose up）作为 SSH 命令发送到远程服务器
+		if err := s.runDeployRemote(compose, deployment, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+			return
+		}
+	} else {
+		// 本地部署
+		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
+		os.MkdirAll(composeDir, 0755)
+
+		if err := s.prepareComposeSource(compose, composeDir, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+			return
+		}
+
+		if err := s.composeUpLocal(compose, composeDir, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
+			return
+		}
 	}
 
-	// Step 2: Run compose up
-	if err := s.composeUp(compose, composeDir, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
-		return
-	}
-
-	// Mark as done
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.db.Model(&schema.Deployment{}).
 		Where("\"deploymentId\" = ?", deployment.DeploymentID).
@@ -200,6 +253,113 @@ func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.D
 
 	s.updateStatus(compose.ComposeID, schema.ApplicationStatusDone)
 	writeLog("Compose deployment completed successfully!")
+}
+
+// runDeployRemote 远程部署：与 TS 版完全一致，将准备源码和 compose up 作为 SSH 命令发送
+func (s *ComposeService) runDeployRemote(compose *schema.Compose, deployment *schema.Deployment, writeLog func(string)) error {
+	conn := process.SSHConnection{
+		Host:       compose.Server.IPAddress,
+		Port:       compose.Server.Port,
+		Username:   compose.Server.Username,
+		PrivateKey: compose.Server.SSHKey.PrivateKey,
+	}
+
+	composePath := "/etc/dokploy/compose"
+	projectPath := fmt.Sprintf("%s/%s/code", composePath, compose.AppName)
+
+	// Step 1: 准备源码（与 TS 版一致，通过 SSH 在远程服务器上执行）
+	var prepareCmd string
+	switch compose.SourceType {
+	case schema.SourceTypeComposeRaw:
+		// 与 TS 版 getCreateComposeFileCommand 一致：base64 编码写入文件
+		encoded := base64Encode(compose.ComposeFile)
+		prepareCmd = fmt.Sprintf(`set -e;
+rm -rf %s;
+mkdir -p %s;
+echo "%s" | base64 -d > "%s/docker-compose.yml";
+echo "File 'docker-compose.yml' created: ✅";`, projectPath, projectPath, encoded, projectPath)
+
+	case schema.SourceTypeComposeGithub, schema.SourceTypeComposeGitlab,
+		schema.SourceTypeComposeGitea, schema.SourceTypeComposeBitbucket,
+		schema.SourceTypeComposeGit:
+		// Git 克隆直接在远程服务器上执行
+		var repoURL, branch string
+		if compose.SourceType == schema.SourceTypeComposeGit {
+			if compose.CustomGitURL == nil || compose.CustomGitBranch == nil {
+				return fmt.Errorf("custom git requires URL and branch")
+			}
+			repoURL = *compose.CustomGitURL
+			branch = *compose.CustomGitBranch
+		} else {
+			if compose.Repository == nil || compose.Branch == nil {
+				return fmt.Errorf("repository and branch are required")
+			}
+			if compose.Owner != nil {
+				repoURL = fmt.Sprintf("https://github.com/%s/%s.git", *compose.Owner, *compose.Repository)
+			} else {
+				repoURL = *compose.Repository
+			}
+			branch = *compose.Branch
+		}
+		prepareCmd = fmt.Sprintf(`set -e;
+rm -rf %s;
+mkdir -p %s;
+git clone --branch %s --depth 1 %s %s;
+echo "Repository cloned: ✅";`, projectPath, filepath.Dir(projectPath), branch, repoURL, projectPath)
+
+	default:
+		return fmt.Errorf("unsupported compose source type: %s", compose.SourceType)
+	}
+
+	// 执行源码准备
+	writeLog("--- Preparing source on remote server ---")
+	prepareWithLog := fmt.Sprintf("(%s) >> %s 2>&1", prepareCmd, deployment.LogPath)
+	_, err := process.ExecAsyncRemote(conn, prepareWithLog, writeLog)
+	if err != nil {
+		return fmt.Errorf("failed to prepare source on remote: %w", err)
+	}
+
+	// Step 2: 构建 env 文件 + compose up（与 TS 版 getBuildComposeCommand 一致）
+	var dockerCmd string
+	composePth := "docker-compose.yml"
+	if compose.ComposePath != "" {
+		composePth = compose.ComposePath
+	}
+
+	switch compose.ComposeType {
+	case schema.ComposeTypeStack:
+		dockerCmd = fmt.Sprintf("stack deploy -c %s %s --prune --with-registry-auth", composePth, compose.AppName)
+	default:
+		dockerCmd = fmt.Sprintf("compose -p %s -f %s up -d --build --remove-orphans", compose.AppName, composePth)
+	}
+
+	// 构建 .env 文件命令（与 TS 版 getCreateEnvFileCommand 一致）
+	envContent := fmt.Sprintf("APP_NAME=%s\n", compose.AppName)
+	if compose.Env != nil && *compose.Env != "" {
+		envContent += *compose.Env + "\n"
+	}
+	if !strings.Contains(envContent, "DOCKER_CONFIG") {
+		envContent += "DOCKER_CONFIG=/root/.docker\n"
+	}
+	encodedEnv := base64Encode(envContent)
+
+	envFilePath := filepath.Join(filepath.Dir(filepath.Join(projectPath, composePth)), ".env")
+
+	buildCmd := fmt.Sprintf(`set -e;
+touch %s;
+echo "%s" | base64 -d > "%s";
+cd "%s";
+docker %s 2>&1 || { echo "Error: ❌ Docker command failed"; exit 1; }
+echo "Docker Compose Deployed: ✅";`, envFilePath, encodedEnv, envFilePath, projectPath, dockerCmd)
+
+	writeLog("--- Running compose up on remote server ---")
+	buildWithLog := fmt.Sprintf("(%s) >> %s 2>&1", buildCmd, deployment.LogPath)
+	_, err = process.ExecAsyncRemote(conn, buildWithLog, writeLog)
+	if err != nil {
+		return fmt.Errorf("failed to run compose on remote: %w", err)
+	}
+
+	return nil
 }
 
 func (s *ComposeService) prepareComposeSource(compose *schema.Compose, composeDir string, writeLog func(string)) error {
@@ -246,37 +406,20 @@ func (s *ComposeService) cloneComposeRepo(compose *schema.Compose, composeDir st
 	return err
 }
 
-func (s *ComposeService) composeUp(compose *schema.Compose, composeDir string, writeLog func(string)) error {
+func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir string, writeLog func(string)) error {
 	var cmd string
 
 	switch compose.ComposeType {
 	case schema.ComposeTypeStack:
-		// Docker stack deploy
 		stackName := compose.AppName
 		if compose.ComposeSuffix != nil {
 			stackName = *compose.ComposeSuffix
 		}
 		cmd = fmt.Sprintf("docker stack deploy -c docker-compose.yml %s --prune", stackName)
 	default:
-		// Docker compose
-		projectName := compose.AppName
-		cmd = fmt.Sprintf("docker compose -p %s up -d --build --remove-orphans", projectName)
+		cmd = fmt.Sprintf("docker compose -p %s up -d --build --remove-orphans", compose.AppName)
 	}
 
-	if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
-		// Remote execution
-		conn := process.SSHConnection{
-			Host:       compose.Server.IPAddress,
-			Port:       compose.Server.Port,
-			Username:   compose.Server.Username,
-			PrivateKey: compose.Server.SSHKey.PrivateKey,
-		}
-		fullCmd := fmt.Sprintf("cd %s && %s", composeDir, cmd)
-		_, err := process.ExecAsyncRemote(conn, fullCmd, writeLog)
-		return err
-	}
-
-	// Local execution
 	_, err := process.ExecAsyncStream(cmd, writeLog, process.WithDir(composeDir))
 	return err
 }
@@ -288,35 +431,26 @@ func (s *ComposeService) Stop(composeID string) error {
 		return err
 	}
 
-	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
+	isRemote := compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil
 
 	switch compose.ComposeType {
 	case schema.ComposeTypeStack:
-		// Stack 模式：docker stack rm
 		cmd := fmt.Sprintf("docker stack rm %s", compose.AppName)
-		if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
-			conn := process.SSHConnection{
-				Host:       compose.Server.IPAddress,
-				Port:       compose.Server.Port,
-				Username:   compose.Server.Username,
-				PrivateKey: compose.Server.SSHKey.PrivateKey,
-			}
+		if isRemote {
+			conn := s.sshConn(compose.Server)
 			_, err = process.ExecAsyncRemote(conn, cmd, nil)
 		} else {
 			_, err = process.ExecAsyncStream(cmd, nil)
 		}
 	default:
-		// docker-compose 模式：docker compose stop（仅停止，不删除容器，与 TS 版一致）
 		cmd := fmt.Sprintf("docker compose -p %s stop", compose.AppName)
-		if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
-			conn := process.SSHConnection{
-				Host:       compose.Server.IPAddress,
-				Port:       compose.Server.Port,
-				Username:   compose.Server.Username,
-				PrivateKey: compose.Server.SSHKey.PrivateKey,
-			}
-			_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("cd %s && %s", composeDir, cmd), nil)
+		if isRemote {
+			// 远程：使用远程路径
+			remoteDir := fmt.Sprintf("/etc/dokploy/compose/%s/code", compose.AppName)
+			conn := s.sshConn(compose.Server)
+			_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("cd %s && %s", remoteDir, cmd), nil)
 		} else {
+			composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
 			_, err = process.ExecAsyncStream(cmd, nil, process.WithDir(composeDir))
 		}
 	}
@@ -337,28 +471,23 @@ func (s *ComposeService) Start(composeID string) error {
 		return err
 	}
 
-	// Stack 模式无 start 概念（需要重新 deploy），仅支持 docker-compose 模式
 	if compose.ComposeType == schema.ComposeTypeStack {
 		return fmt.Errorf("stack compose does not support start, use deploy instead")
 	}
 
-	composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName, "code")
-	// 使用数据库中的 composePath（与 TS 版一致）
 	composePath := compose.ComposePath
 	if composePath == "" {
 		composePath = "./docker-compose.yml"
 	}
 	cmd := fmt.Sprintf("docker compose -p %s -f %s up -d", compose.AppName, composePath)
 
-	if compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil {
-		conn := process.SSHConnection{
-			Host:       compose.Server.IPAddress,
-			Port:       compose.Server.Port,
-			Username:   compose.Server.Username,
-			PrivateKey: compose.Server.SSHKey.PrivateKey,
-		}
-		_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("cd %s && %s", composeDir, cmd), nil)
+	isRemote := compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil
+	if isRemote {
+		remoteDir := fmt.Sprintf("/etc/dokploy/compose/%s/code", compose.AppName)
+		conn := s.sshConn(compose.Server)
+		_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("cd %s && %s", remoteDir, cmd), nil)
 	} else {
+		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName, "code")
 		_, err = process.ExecAsyncStream(cmd, nil, process.WithDir(composeDir))
 	}
 
@@ -388,3 +517,19 @@ func (s *ComposeService) failDeployment(deploymentID, composeID, errMsg string) 
 		})
 	s.updateStatus(composeID, schema.ApplicationStatusError)
 }
+
+// sshConn 从 Server 构建 SSH 连接参数
+func (s *ComposeService) sshConn(server *schema.Server) process.SSHConnection {
+	return process.SSHConnection{
+		Host:       server.IPAddress,
+		Port:       server.Port,
+		Username:   server.Username,
+		PrivateKey: server.SSHKey.PrivateKey,
+	}
+}
+
+// base64Encode 将字符串 base64 编码（用于通过 SSH 安全传输文件内容）
+func base64Encode(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+

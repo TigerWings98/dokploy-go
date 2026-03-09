@@ -118,29 +118,37 @@ func (s *ApplicationService) runDeploy(app *schema.Application, deployment *sche
 	writeLog(fmt.Sprintf("Starting deployment for %s (%s)", app.Name, app.AppName))
 	writeLog(fmt.Sprintf("Build type: %s, Source: %s", app.BuildType, app.SourceType))
 
-	// Step 1: Clone/prepare source code
-	writeLog("--- Preparing source code ---")
-	buildDir := filepath.Join(s.cfg.Paths.ApplicationsPath, app.AppName, "code")
-	if err := s.prepareSource(app, buildDir, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
-		return
+	isRemote := app.ServerID != nil && app.Server != nil && app.Server.SSHKey != nil
+
+	if isRemote {
+		// 远程部署：与 TS 版一致，将整个流水线（clone + build）作为 SSH 命令发送到远程服务器
+		if err := s.runDeployRemote(app, deployment, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+	} else {
+		// 本地部署
+		buildDir := filepath.Join(s.cfg.Paths.ApplicationsPath, app.AppName, "code")
+
+		writeLog("--- Preparing source code ---")
+		if err := s.prepareSource(app, buildDir, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+
+		writeLog("--- Building application ---")
+		if err := s.buildApplication(app, buildDir, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+
+		writeLog("--- Creating Docker service ---")
+		if err := s.createService(app, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
 	}
 
-	// Step 2: Build
-	writeLog("--- Building application ---")
-	if err := s.buildApplication(app, buildDir, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
-		return
-	}
-
-	// Step 3: Create/update Docker service
-	writeLog("--- Creating Docker service ---")
-	if err := s.createService(app, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
-		return
-	}
-
-	// Mark deployment as done
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.db.Model(&schema.Deployment{}).
 		Where("\"deploymentId\" = ?", deployment.DeploymentID).
@@ -151,6 +159,77 @@ func (s *ApplicationService) runDeploy(app *schema.Application, deployment *sche
 
 	s.updateStatus(app.ApplicationID, schema.ApplicationStatusDone)
 	writeLog("Deployment completed successfully!")
+}
+
+// runDeployRemote 远程部署：与 TS 版完全一致，将 clone + build 作为 SSH 命令发送
+func (s *ApplicationService) runDeployRemote(app *schema.Application, deployment *schema.Deployment, writeLog func(string)) error {
+	conn := process.SSHConnection{
+		Host:       app.Server.IPAddress,
+		Port:       app.Server.Port,
+		Username:   app.Server.Username,
+		PrivateKey: app.Server.SSHKey.PrivateKey,
+	}
+
+	buildDir := fmt.Sprintf("/etc/dokploy/applications/%s/code", app.AppName)
+
+	// 与 TS 版一致：构建 set -e; clone; build 的完整命令
+	command := "set -e;"
+
+	if app.SourceType == schema.SourceTypeDocker {
+		// Docker 源类型：直接 pull 镜像
+		if app.DockerImage != nil {
+			command += fmt.Sprintf(" docker pull %s;", *app.DockerImage)
+		}
+	} else {
+		// Git 源类型：生成 clone 命令
+		cloneCmd, err := git.GenerateCloneCommand(app, buildDir)
+		if err != nil {
+			return fmt.Errorf("failed to generate clone command: %w", err)
+		}
+		if cloneCmd != "" {
+			command += " " + cloneCmd + ";"
+		}
+
+		// 生成 build 命令
+		buildPath := buildDir
+		if app.BuildPath != nil && *app.BuildPath != "/" {
+			buildPath = filepath.Join(buildDir, *app.BuildPath)
+		}
+
+		opts := builder.BuildOptions{
+			AppName:          app.AppName,
+			BuildType:        string(app.BuildType),
+			BuildPath:        buildPath,
+			Dockerfile:       safeStr(app.Dockerfile),
+			DockerContext:    safeStr(app.DockerContextPath),
+			DockerBuildStage: safeStr(app.DockerBuildStage),
+			HerokuVersion:    safeStr(app.HerokuVersion),
+			RailpackVersion:  safeStr(app.RailpackVersion),
+			PublishDir:       safeStr(app.PublishDirectory),
+			CleanCache:       app.CleanCache != nil && *app.CleanCache,
+		}
+		if app.BuildArgs != nil && *app.BuildArgs != "" {
+			opts.BuildArgs = parseEnvString(*app.BuildArgs)
+		}
+
+		buildCmd, err := builder.GenerateBuildCommand(opts)
+		if err != nil {
+			return fmt.Errorf("failed to generate build command: %w", err)
+		}
+		command += " " + buildCmd + ";"
+	}
+
+	// 通过 SSH 执行完整命令（与 TS 版一致：包含日志重定向）
+	commandWithLog := fmt.Sprintf("(%s) >> %s 2>&1", command, deployment.LogPath)
+	writeLog("--- Running deploy on remote server ---")
+	_, err := process.ExecAsyncRemote(conn, commandWithLog, writeLog)
+	if err != nil {
+		return fmt.Errorf("remote deploy failed: %w", err)
+	}
+
+	// 服务创建/更新（远程）
+	writeLog("--- Creating Docker service on remote ---")
+	return s.createServiceRemote(app, writeLog)
 }
 
 func (s *ApplicationService) prepareSource(app *schema.Application, buildDir string, writeLog func(string)) error {
@@ -335,18 +414,71 @@ func (s *ApplicationService) runRebuild(app *schema.Application, deployment *sch
 
 	writeLog(fmt.Sprintf("Rebuilding %s (%s) - skipping source clone", app.Name, app.AppName))
 
-	// 跳过 prepareSource，直接 build
-	buildDir := filepath.Join(s.cfg.Paths.ApplicationsPath, app.AppName, "code")
-	writeLog("--- Building application ---")
-	if err := s.buildApplication(app, buildDir, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
-		return
-	}
+	isRemote := app.ServerID != nil && app.Server != nil && app.Server.SSHKey != nil
 
-	writeLog("--- Creating Docker service ---")
-	if err := s.createService(app, writeLog); err != nil {
-		s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
-		return
+	if isRemote {
+		// 远程 rebuild：跳过 clone，仅 build + 重建服务
+		conn := process.SSHConnection{
+			Host:       app.Server.IPAddress,
+			Port:       app.Server.Port,
+			Username:   app.Server.Username,
+			PrivateKey: app.Server.SSHKey.PrivateKey,
+		}
+
+		buildDir := fmt.Sprintf("/etc/dokploy/applications/%s/code", app.AppName)
+		buildPath := buildDir
+		if app.BuildPath != nil && *app.BuildPath != "/" {
+			buildPath = filepath.Join(buildDir, *app.BuildPath)
+		}
+
+		opts := builder.BuildOptions{
+			AppName:          app.AppName,
+			BuildType:        string(app.BuildType),
+			BuildPath:        buildPath,
+			Dockerfile:       safeStr(app.Dockerfile),
+			DockerContext:    safeStr(app.DockerContextPath),
+			DockerBuildStage: safeStr(app.DockerBuildStage),
+			HerokuVersion:    safeStr(app.HerokuVersion),
+			RailpackVersion:  safeStr(app.RailpackVersion),
+			PublishDir:       safeStr(app.PublishDirectory),
+			CleanCache:       app.CleanCache != nil && *app.CleanCache,
+		}
+		if app.BuildArgs != nil && *app.BuildArgs != "" {
+			opts.BuildArgs = parseEnvString(*app.BuildArgs)
+		}
+
+		buildCmd, err := builder.GenerateBuildCommand(opts)
+		if err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+
+		command := fmt.Sprintf("set -e; %s", buildCmd)
+		commandWithLog := fmt.Sprintf("(%s) >> %s 2>&1", command, deployment.LogPath)
+		_, err = process.ExecAsyncRemote(conn, commandWithLog, writeLog)
+		if err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+
+		if err := s.createServiceRemote(app, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+	} else {
+		// 本地 rebuild
+		buildDir := filepath.Join(s.cfg.Paths.ApplicationsPath, app.AppName, "code")
+		writeLog("--- Building application ---")
+		if err := s.buildApplication(app, buildDir, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
+
+		writeLog("--- Creating Docker service ---")
+		if err := s.createService(app, writeLog); err != nil {
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, err.Error())
+			return
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)

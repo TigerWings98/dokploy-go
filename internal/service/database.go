@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/config"
@@ -268,15 +269,15 @@ func (s *DatabaseService) deployDatabaseService(
 	// Build docker service create command
 	cmd := fmt.Sprintf("docker service create --name %s --network dokploy-network", appName)
 
-	// Environment variables
+	// Environment variables（使用单引号包裹值，防止 shell 解释特殊字符）
 	for k, v := range envVars {
-		cmd += fmt.Sprintf(" --env %s=%s", k, v)
+		cmd += fmt.Sprintf(" --env '%s=%s'", k, shellEscapeSingleQuote(v))
 	}
 
 	// Extra env from user
 	if extraEnv != nil && *extraEnv != "" {
 		for k, v := range parseEnvString(*extraEnv) {
-			cmd += fmt.Sprintf(" --env %s=%s", k, v)
+			cmd += fmt.Sprintf(" --env '%s=%s'", k, shellEscapeSingleQuote(v))
 		}
 	}
 
@@ -327,12 +328,20 @@ func (s *DatabaseService) deployDatabaseService(
 			Username:   server.Username,
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
+		// 与 TS 版一致：先在远程服务器 pull 镜像
+		pullCmd := fmt.Sprintf("docker pull %s", dockerImage)
+		process.ExecAsyncRemote(conn, pullCmd, nil)
 		_, err := process.ExecAsyncRemote(conn, cmd, nil)
 		return err
 	}
 
 	_, err := process.ExecAsync(cmd)
 	return err
+}
+
+// shellEscapeSingleQuote 转义单引号，用于 shell 命令中的值
+func shellEscapeSingleQuote(s string) string {
+	return strings.ReplaceAll(s, "'", "'\\''")
 }
 
 func (s *DatabaseService) removeServiceByName(appName string, serverID *string) {

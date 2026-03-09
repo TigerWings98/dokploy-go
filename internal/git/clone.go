@@ -292,6 +292,81 @@ func getGithubInstallationToken(app *schema.Application) (string, error) {
 	return strings.TrimSpace(result.Stdout), nil
 }
 
+// GenerateCloneCommand 生成 git clone shell 命令字符串（用于远程 SSH 执行，与 TS 版一致）
+// 返回的命令包含 rm -rf + git clone，可直接通过 SSH 在远程服务器上执行
+func GenerateCloneCommand(app *schema.Application, outputPath string) (string, error) {
+	var repoURL, branch string
+	enableSubmodules := app.EnableSubmodules
+
+	switch app.SourceType {
+	case schema.SourceTypeGithub:
+		if app.Repository == nil || app.Owner == nil || app.Branch == nil {
+			return "", fmt.Errorf("github source requires repository, owner, and branch")
+		}
+		token, _ := getGithubInstallationToken(app)
+		if token != "" {
+			repoURL = fmt.Sprintf("https://oauth2:%s@github.com/%s/%s.git", token, *app.Owner, *app.Repository)
+		} else {
+			repoURL = fmt.Sprintf("https://github.com/%s/%s.git", *app.Owner, *app.Repository)
+		}
+		branch = *app.Branch
+
+	case schema.SourceTypeGitlab:
+		if app.GitlabRepository == nil || app.GitlabBranch == nil {
+			return "", fmt.Errorf("gitlab source requires repository and branch")
+		}
+		repoURL = *app.GitlabRepository
+		if app.Gitlab != nil && app.Gitlab.AccessToken != nil && *app.Gitlab.AccessToken != "" {
+			repoURL = injectOAuth2Token(repoURL, *app.Gitlab.AccessToken)
+		}
+		branch = *app.GitlabBranch
+
+	case schema.SourceTypeBitbucket:
+		if app.BitbucketOwner == nil || app.BitbucketRepository == nil || app.BitbucketBranch == nil {
+			return "", fmt.Errorf("bitbucket source requires owner, repository, and branch")
+		}
+		repoURL = fmt.Sprintf("https://bitbucket.org/%s/%s.git", *app.BitbucketOwner, *app.BitbucketRepository)
+		if app.Bitbucket != nil && app.Bitbucket.BitbucketUsername != nil && app.Bitbucket.AppPassword != nil {
+			repoURL = fmt.Sprintf("https://%s:%s@bitbucket.org/%s/%s.git",
+				url.PathEscape(*app.Bitbucket.BitbucketUsername),
+				url.PathEscape(*app.Bitbucket.AppPassword),
+				*app.BitbucketOwner, *app.BitbucketRepository)
+		}
+		branch = *app.BitbucketBranch
+
+	case schema.SourceTypeGitea:
+		if app.GiteaRepository == nil || app.GiteaBranch == nil {
+			return "", fmt.Errorf("gitea source requires repository and branch")
+		}
+		repoURL = *app.GiteaRepository
+		if app.Gitea != nil && app.Gitea.AccessToken != nil && *app.Gitea.AccessToken != "" {
+			repoURL = injectOAuth2Token(repoURL, *app.Gitea.AccessToken)
+		}
+		branch = *app.GiteaBranch
+
+	case schema.SourceTypeGit:
+		if app.CustomGitURL == nil || app.CustomGitBranch == nil {
+			return "", fmt.Errorf("custom git source requires URL and branch")
+		}
+		repoURL = *app.CustomGitURL
+		branch = *app.CustomGitBranch
+
+	case schema.SourceTypeDocker:
+		return "", nil // Docker source 不需要 clone
+
+	default:
+		return "", fmt.Errorf("unsupported source type: %s", app.SourceType)
+	}
+
+	cloneCmd := fmt.Sprintf("git clone --branch %s --depth 1", branch)
+	if enableSubmodules {
+		cloneCmd += " --recurse-submodules"
+	}
+	cloneCmd += fmt.Sprintf(" --progress %s %s", repoURL, outputPath)
+
+	return fmt.Sprintf("rm -rf %s && mkdir -p %s && %s", outputPath, outputPath, cloneCmd), nil
+}
+
 // sanitizeURLForLog removes credentials from a URL for safe logging.
 func sanitizeURLForLog(rawURL string) string {
 	u, err := url.Parse(rawURL)

@@ -220,7 +220,7 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 	// tRPC compatibility layer (matches frontend's tRPC client calls)
 	trpc := e.Group("/api/trpc")
-	trpc.Use(mw.TRPCAuthMiddleware(h.Auth, "settings.health", "sso.showSignInWithSSO", "compose.templates"))
+	trpc.Use(mw.TRPCAuthMiddleware(h.Auth, "settings.health", "settings.isCloud", "sso.showSignInWithSSO", "compose.templates"))
 	trpc.Any("/:procedures", h.HandleTRPC)
 
 	// OpenAPI REST 兼容层（与 TS 版 @dokploy/trpc-openapi 行为一致）

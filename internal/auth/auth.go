@@ -32,6 +32,7 @@ func New(db *db.DB) *Auth {
 }
 
 // ValidateSession validates a session token and returns the associated user.
+// 与 TS 版 validateRequest 对齐：查询 member 表补充 activeOrganizationId 和用户角色。
 func (a *Auth) ValidateSession(token string) (*schema.User, *schema.Session, error) {
 	var session schema.Session
 	err := a.db.Where("token = ?", token).First(&session).Error
@@ -49,6 +50,25 @@ func (a *Auth) ValidateSession(token string) (*schema.User, *schema.Session, err
 			return nil, nil, ErrUserNotFound
 		}
 		return nil, nil, err
+	}
+
+	// 与 TS 版 validateRequest 对齐：从 member 表查询用户的组织信息，
+	// 补充 activeOrganizationId 和用户角色（TS 版在每次请求时都做这个查询）
+	var member schema.Member
+	q := a.db.Preload("Organization").Where("user_id = ?", user.ID)
+	if session.ActiveOrganizationID != nil && *session.ActiveOrganizationID != "" {
+		q = q.Where("organization_id = ?", *session.ActiveOrganizationID)
+	}
+	if err := q.Order("is_default DESC, created_at DESC").First(&member).Error; err == nil {
+		// 用 member 的组织 ID 覆盖 session（与 TS 版第 494 行一致）
+		if member.Organization != nil {
+			orgID := member.Organization.ID
+			session.ActiveOrganizationID = &orgID
+		}
+		// 同步用户角色（与 TS 版第 489 行一致）
+		if member.Role != "" {
+			user.Role = string(member.Role)
+		}
 	}
 
 	return &user, &session, nil

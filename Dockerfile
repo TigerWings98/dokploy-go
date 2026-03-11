@@ -48,6 +48,7 @@ RUN apk add --no-cache \
     bash \
     apache2-utils \
     iproute2 \
+    zip \
     unzip \
     rclone
 

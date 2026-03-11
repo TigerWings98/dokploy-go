@@ -86,11 +86,11 @@ func (h *Handler) registerSSOTRPC(r procedureRegistry) {
 			OrganizationID: session.ActiveOrganizationID,
 		}
 		if in.OIDCConfig != nil {
-			s := string(*in.OIDCConfig)
+			s := rawJSONToString(*in.OIDCConfig)
 			provider.OIDCConfig = &s
 		}
 		if in.SAMLConfig != nil {
-			s := string(*in.SAMLConfig)
+			s := rawJSONToString(*in.SAMLConfig)
 			provider.SAMLConfig = &s
 		}
 		if err := h.DB.Create(provider).Error; err != nil {
@@ -154,10 +154,10 @@ func (h *Handler) registerSSOTRPC(r procedureRegistry) {
 			"provider_id": in.ProviderID,
 		}
 		if in.OIDCConfig != nil {
-			updates["oidc_config"] = string(*in.OIDCConfig)
+			updates["oidc_config"] = rawJSONToString(*in.OIDCConfig)
 		}
 		if in.SAMLConfig != nil {
-			updates["saml_config"] = string(*in.SAMLConfig)
+			updates["saml_config"] = rawJSONToString(*in.SAMLConfig)
 		}
 		h.DB.Model(&existing).Updates(updates)
 		return map[string]bool{"success": true}, nil
@@ -291,6 +291,21 @@ func (h *Handler) registerSSOTRPC(r procedureRegistry) {
 		h.DB.Model(&owner).Update("trustedOrigins", pq.StringArray(next))
 		return map[string]bool{"success": true}, nil
 	}
+}
+
+// rawJSONToString 将 json.RawMessage 转为纯字符串。
+// 前端可能发送 JSON 对象（如 {"clientId":"..."}）或预序列化的 JSON 字符串（如 "{\"clientId\":\"...\"}"），
+// 此函数确保存入数据库的始终是纯 JSON 对象字符串，避免双重编码。
+func rawJSONToString(raw json.RawMessage) string {
+	s := string(raw)
+	// 如果外层是 JSON 字符串（以 " 开头），先 unmarshal 去掉引号
+	if len(s) > 0 && s[0] == '"' {
+		var unquoted string
+		if err := json.Unmarshal(raw, &unquoted); err == nil {
+			return unquoted
+		}
+	}
+	return s
 }
 
 func normalizeDomains(domains []string) []string {

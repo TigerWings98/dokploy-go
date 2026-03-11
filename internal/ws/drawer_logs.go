@@ -751,44 +751,91 @@ func trimSpace(s string) string {
 	return s[start:end]
 }
 
-// handleBackupRestore handles backup restore with log streaming.
+// handleBackupRestore 处理备份恢复，调用真正的 restore 逻辑并流式输出日志。
+// 输入字段与前端 restoreBackupWithLogs subscription 一致。
 func (h *Handler) handleBackupRestore(input json.RawMessage, emit func(string) bool, done chan struct{}) {
 	var in struct {
-		BackupID      string `json:"backupId"`
-		DestinationID string `json:"destinationId"`
-		DatabaseType  string `json:"databaseType"`
-		Database      string `json:"database"`
-		BackupType    string `json:"backupType"`
+		DatabaseID    string          `json:"databaseId"`
+		DatabaseType  string          `json:"databaseType"`
+		BackupType    string          `json:"backupType"`
+		DatabaseName  string          `json:"databaseName"`
+		BackupFile    string          `json:"backupFile"`
+		DestinationID string          `json:"destinationId"`
+		Metadata      json.RawMessage `json:"metadata"`
 	}
 	json.Unmarshal(input, &in)
 
-	emit("\nRestoring backup: 🔄\n")
-	emit(fmt.Sprintf("Backup ID: %s\n", in.BackupID))
+	emit(fmt.Sprintf("\nRestoring backup: 🔄\n"))
 	emit(fmt.Sprintf("Database type: %s\n", in.DatabaseType))
+	emit(fmt.Sprintf("Backup file: %s\n", in.BackupFile))
 
-	// TODO: Implement actual backup restore with streaming
-	// For now, send completion signal
+	if h.BackupSvc == nil {
+		emit("Error: backup service not available\n")
+		return
+	}
+
+	emitFn := func(log string) { emit(log + "\n") }
+
+	if in.BackupType == "compose" {
+		// Compose 恢复
+		metadataStr := ""
+		if in.Metadata != nil {
+			metadataStr = string(in.Metadata)
+		}
+		if err := h.BackupSvc.RestoreComposeBackup(in.DatabaseID, in.DestinationID, in.DatabaseType, in.DatabaseName, in.BackupFile, metadataStr, emitFn); err != nil {
+			emit(fmt.Sprintf("Error: %s\n", err.Error()))
+			return
+		}
+	} else if in.DatabaseType == "web-server" {
+		// Web Server 恢复
+		if err := h.BackupSvc.RestoreWebServerBackup(in.DestinationID, in.BackupFile, emitFn); err != nil {
+			emit(fmt.Sprintf("Error: %s\n", err.Error()))
+			return
+		}
+	} else {
+		// 数据库恢复（postgres/mysql/mariadb/mongo）
+		if err := h.BackupSvc.RestoreBackup(in.DatabaseID, in.BackupFile); err != nil {
+			emit(fmt.Sprintf("Error: %s\n", err.Error()))
+			return
+		}
+	}
+
 	emit("\nRestore Backup: ✅\n")
-	emit("Deployment completed successfully!")
+	emit("Restore completed successfully!")
 }
 
-// handleVolumeBackupRestore handles volume backup restore with log streaming.
+// handleVolumeBackupRestore 处理卷备份恢复。
 func (h *Handler) handleVolumeBackupRestore(input json.RawMessage, emit func(string) bool, done chan struct{}) {
 	var in struct {
-		BackupFileName string `json:"backupFileName"`
-		DestinationID  string `json:"destinationId"`
-		VolumeName     string `json:"volumeName"`
-		ID             string `json:"id"`
-		ServiceType    string `json:"serviceType"`
+		VolumeBackupID string `json:"volumeBackupId"`
+		FileName       string `json:"fileName"`
 	}
 	json.Unmarshal(input, &in)
 
-	emit("\nRestoring volume backup: 🔄\n")
-	emit(fmt.Sprintf("Volume: %s\n", in.VolumeName))
-	emit(fmt.Sprintf("File: %s\n", in.BackupFileName))
+	emit(fmt.Sprintf("\nRestoring volume backup: 🔄\n"))
+	emit(fmt.Sprintf("Volume backup ID: %s\n", in.VolumeBackupID))
+	emit(fmt.Sprintf("File: %s\n", in.FileName))
 
-	// TODO: Implement actual volume backup restore with streaming
+	if h.BackupSvc == nil {
+		emit("Error: backup service not available\n")
+		return
+	}
+
+	// BackupSvc 需要实现 RestoreVolumeBackup 接口
+	type volumeRestorer interface {
+		RestoreVolumeBackup(volumeBackupID string, filename string) error
+	}
+	if vr, ok := h.BackupSvc.(volumeRestorer); ok {
+		if err := vr.RestoreVolumeBackup(in.VolumeBackupID, in.FileName); err != nil {
+			emit(fmt.Sprintf("Error: %s\n", err.Error()))
+			return
+		}
+	} else {
+		emit("Error: volume backup restore not supported\n")
+		return
+	}
+
 	emit("\nRestore Volume Backup: ✅\n")
-	emit("Deployment completed successfully!")
+	emit("Restore completed successfully!")
 }
 

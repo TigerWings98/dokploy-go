@@ -210,6 +210,7 @@ func main() {
 
 	// Register WebSocket routes
 	wsHandler := ws.NewHandler(database, dockerClient, a, cfg.Paths.MonitoringPath)
+	wsHandler.BackupSvc = backupSvc
 	wsHandler.RegisterRoutes(e)
 
 	// Register frontend routes (must be last - catches all unmatched routes)

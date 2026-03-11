@@ -34,12 +34,20 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 4096,
 }
 
+// BackupRestorer 定义 backup restore 所需的方法接口
+type BackupRestorer interface {
+	RestoreBackup(backupID string, filename string) error
+	RestoreComposeBackup(composeID string, destinationID string, databaseType string, databaseName string, backupFile string, metadataJSON string, emit func(string)) error
+	RestoreWebServerBackup(destinationID string, backupFile string, emit func(string)) error
+}
+
 // Handler holds WebSocket handler dependencies.
 type Handler struct {
 	DB             *db.DB
 	Docker         *docker.Client
 	Auth           *auth.Auth
 	MonitoringPath string
+	BackupSvc      BackupRestorer
 }
 
 // NewHandler creates a new WebSocket handler.

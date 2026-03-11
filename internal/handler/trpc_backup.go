@@ -47,6 +47,19 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 	r["backup.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var b schema.Backup
 		json.Unmarshal(input, &b)
+		// metadata 字段：前端可能发送空对象 {} 或 undefined，需要特殊处理
+		// 因为 Metadata 是 *string（存 jsonb），直接 unmarshal {} 到 *string 会失败
+		var raw map[string]json.RawMessage
+		json.Unmarshal(input, &raw)
+		if m, ok := raw["metadata"]; ok && len(m) > 0 && string(m) != "null" {
+			s := string(m)
+			// 空对象 {} 存为 null（与 TS 版行为一致：metadata 可选，空时不存）
+			if s == "{}" {
+				b.Metadata = nil
+			} else {
+				b.Metadata = &s
+			}
+		}
 		if err := h.DB.Create(&b).Error; err != nil {
 			return nil, err
 		}
@@ -76,8 +89,38 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["backupId"].(string)
-		delete(in, "backupId")
-		h.DB.Model(&schema.Backup{}).Where("\"backupId\" = ?", id).Updates(in)
+
+		// 只允许更新 apiUpdateBackup 定义的字段（与 TS 版 Zod schema 对齐）
+		// 不更新 userId、backupType 等字段，防止覆盖外键导致记录"消失"
+		allowedKeys := map[string]bool{
+			"schedule": true, "enabled": true, "prefix": true,
+			"destinationId": true, "database": true, "keepLatestCount": true,
+			"serviceName": true, "metadata": true, "databaseType": true,
+		}
+		updates := make(map[string]interface{})
+		for k, v := range in {
+			if allowedKeys[k] {
+				updates[k] = v
+			}
+		}
+		// metadata 特殊处理：空对象 {} 存为 null，非空存为 JSON 字符串
+		if m, ok := updates["metadata"]; ok {
+			switch mv := m.(type) {
+			case map[string]interface{}:
+				if len(mv) == 0 {
+					updates["metadata"] = nil
+				} else {
+					bs, _ := json.Marshal(mv)
+					s := string(bs)
+					updates["metadata"] = s
+				}
+			case nil:
+				// metadata: null → 保持 null
+			}
+		}
+		if err := h.DB.Model(&schema.Backup{}).Where("\"backupId\" = ?", id).Updates(updates).Error; err != nil {
+			return nil, &trpcErr{"Failed to update backup: " + err.Error(), "BAD_REQUEST", 400}
+		}
 
 		// 重新调度 cron job（与 TS 版一致：enabled → remove + re-schedule，disabled → remove）
 		if h.BackupSvc != nil {

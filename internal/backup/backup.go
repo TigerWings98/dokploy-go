@@ -168,6 +168,62 @@ func getVolumeServiceAppName(vb *schema.VolumeBackup) string {
 	return vb.AppName
 }
 
+// createBackupDeployment 创建备份执行的 Deployment 记录（与 TS 版 createDeploymentBackup 对齐）
+// 每次备份执行会生成一条 Deployment，记录状态和日志路径，供前端展示备份历史
+func (s *Service) createBackupDeployment(backup *schema.Backup, title string) *schema.Deployment {
+	appName := getServiceAppName(backup)
+	logsPath := s.cfg.Paths.LogsPath
+	logDir := filepath.Join(logsPath, appName)
+	os.MkdirAll(logDir, 0755)
+
+	formattedTime := time.Now().UTC().Format("2006-01-02:15:04:05")
+	logFile := filepath.Join(logDir, fmt.Sprintf("%s-%s.log", appName, formattedTime))
+	os.WriteFile(logFile, []byte("Initializing backup\n"), 0644)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	status := schema.DeploymentStatusRunning
+	desc := title
+	backupID := backup.BackupID
+	deployment := &schema.Deployment{
+		BackupID:    &backupID,
+		Title:       title,
+		Description: &desc,
+		Status:      &status,
+		LogPath:     logFile,
+		StartedAt:   &now,
+	}
+
+	// 清理旧的部署记录，只保留最近 10 条（与 TS 版 removeLastTenDeployments 对齐）
+	var oldDeployments []schema.Deployment
+	s.db.Where("\"backupId\" = ?", backup.BackupID).Order("\"createdAt\" DESC").Offset(10).Find(&oldDeployments)
+	for _, old := range oldDeployments {
+		os.Remove(old.LogPath)
+		s.db.Delete(&old)
+	}
+
+	if err := s.db.Create(deployment).Error; err != nil {
+		log.Printf("Warning: failed to create backup deployment record: %v", err)
+		return nil
+	}
+	return deployment
+}
+
+// updateDeploymentStatus 更新 Deployment 记录状态（与 TS 版 updateDeploymentStatus 对齐）
+func (s *Service) updateDeploymentStatus(deployment *schema.Deployment, status schema.DeploymentStatus, errMsg string) {
+	if deployment == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	updates := map[string]interface{}{
+		"status":     status,
+		"finishedAt": now,
+	}
+	if errMsg != "" {
+		updates["errorMessage"] = errMsg
+	}
+	s.db.Model(deployment).Updates(updates)
+}
+
 // RunBackup executes a backup for the given backup configuration.
 func (s *Service) RunBackup(backupID string) error {
 	var backup schema.Backup
@@ -192,11 +248,15 @@ func (s *Service) RunBackup(backupID string) error {
 		return fmt.Errorf("backup not found: %w", err)
 	}
 
-	// 使用 defer 在出错时发送备份失败通知
+	// 创建 Deployment 记录（与 TS 版对齐：每次备份执行都有一条记录）
+	deployment := s.createBackupDeployment(&backup, "Initializing Backup")
+
+	// 使用 defer 在出错时发送备份失败通知并更新 Deployment 状态
 	var backupErr error
 	defer func() {
 		if backupErr != nil {
 			s.sendBackupNotification(&backup, "error", backupErr.Error())
+			s.updateDeploymentStatus(deployment, schema.DeploymentStatusError, backupErr.Error())
 		}
 	}()
 
@@ -222,6 +282,7 @@ func (s *Service) RunBackup(backupID string) error {
 		if backupErr == nil {
 			s.sendBackupNotification(&backup, "success", "")
 			s.keepLatestNBackups(&backup, nil)
+			s.updateDeploymentStatus(deployment, schema.DeploymentStatusDone, "")
 		}
 		return backupErr
 	}
@@ -381,8 +442,9 @@ func (s *Service) RunBackup(backupID string) error {
 		}
 	}
 
-	// 发送备份成功通知
+	// 发送备份成功通知 + 更新 Deployment 状态
 	s.sendBackupNotification(&backup, "success", "")
+	s.updateDeploymentStatus(deployment, schema.DeploymentStatusDone, "")
 
 	// 清理旧备份（与 TS 版 keepLatestNBackups 对齐）
 	s.keepLatestNBackups(&backup, serverID)

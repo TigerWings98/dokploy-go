@@ -76,6 +76,9 @@ func (b *Backup) BeforeCreate(tx *gorm.DB) error {
 	if b.BackupID == "" {
 		b.BackupID, _ = gonanoid.New()
 	}
+	if b.AppName == "" {
+		b.AppName = GenerateAppName("backup")
+	}
 	return nil
 }
 
@@ -118,6 +121,9 @@ func (VolumeBackup) TableName() string { return "volume_backup" }
 func (v *VolumeBackup) BeforeCreate(tx *gorm.DB) error {
 	if v.VolumeBackupID == "" {
 		v.VolumeBackupID, _ = gonanoid.New()
+	}
+	if v.AppName == "" {
+		v.AppName = GenerateAppName("volume-backup")
 	}
 	if v.CreatedAt == "" {
 		v.CreatedAt = time.Now().UTC().Format(time.RFC3339)

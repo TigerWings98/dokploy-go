@@ -52,7 +52,6 @@ type Backup struct {
 	KeepLatestCount *int         `gorm:"column:keepLatestCount" json:"keepLatestCount"`
 	BackupType      string       `gorm:"column:backupType;type:text;not null;default:'database'" json:"backupType"`
 	DatabaseType    DatabaseType `gorm:"column:databaseType;type:text;not null" json:"databaseType"`
-	CreatedAt       string       `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	DestinationID   string       `gorm:"column:destinationId;type:text;not null" json:"destinationId"`
 	ComposeID       *string      `gorm:"column:composeId;type:text" json:"composeId"`
 	PostgresID      *string      `gorm:"column:postgresId;type:text" json:"postgresId"`
@@ -76,9 +75,6 @@ func (Backup) TableName() string { return "backup" }
 func (b *Backup) BeforeCreate(tx *gorm.DB) error {
 	if b.BackupID == "" {
 		b.BackupID, _ = gonanoid.New()
-	}
-	if b.CreatedAt == "" {
-		b.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 	return nil
 }

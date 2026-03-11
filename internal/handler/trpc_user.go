@@ -409,25 +409,47 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 			return nil, &trpcErr{"Invitation not found", "NOT_FOUND", 404}
 		}
 
-		// Look up the notification provider (for email sending)
-		var notif schema.Notification
-		if err := h.DB.First(&notif, "\"notificationId\" = ?", in.NotificationID).Error; err != nil {
+		// 验证通知渠道存在
+		var notifCount int64
+		h.DB.Model(&schema.Notification{}).Where("\"notificationId\" = ?", in.NotificationID).Count(&notifCount)
+		if notifCount == 0 {
 			return nil, &trpcErr{"Notification provider not found", "NOT_FOUND", 404}
 		}
 
-		// Generate invitation link
-		// TODO: Send actual email via notification provider when email service supports it
-		// inviteLink := fmt.Sprintf("/invitation?token=%s", in.InvitationID)
+		// 生成邀请链接
+		scheme := "https"
+		if c.Request().TLS == nil {
+			scheme = "http"
+		}
+		host := c.Request().Host
+		inviteLink := fmt.Sprintf("%s://%s/invitation?token=%s", scheme, host, in.InvitationID)
 
-		return map[string]string{
-			"inviteLink": fmt.Sprintf("/invitation?token=%s", in.InvitationID),
-		}, nil
+		// 查找组织名称
+		orgName := "Dokploy"
+		member, _ := h.getDefaultMember(c)
+		if member != nil {
+			var org schema.Organization
+			if h.DB.First(&org, "id = ?", member.OrganizationID).Error == nil && org.Name != "" {
+				orgName = org.Name
+			}
+		}
+
+		// 通过通知渠道的 Email/Resend 配置发送邀请邮件
+		htmlContent := fmt.Sprintf(
+			`<p>You are invited to join %s on Dokploy. Click the link to accept the invitation: <a href="%s">Accept Invitation</a></p>`,
+			orgName, inviteLink,
+		)
+		if h.Notifier != nil && inv.Email != "" {
+			go h.Notifier.SendEmailToRecipient(in.NotificationID, inv.Email, "Invitation to join organization", htmlContent)
+		}
+
+		return inviteLink, nil
 	}
 
 	r["user.getContainerMetrics"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{
-			"containers": []interface{}{},
-		}, nil
+		// 代理到本地 dokploy-monitoring 容器的 /metrics/containers 端点
+		monitoringURL := "http://127.0.0.1:3001/metrics/containers"
+		return proxyMonitoringRequest(monitoringURL)
 	}
 
 	r["user.generateToken"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -440,7 +462,9 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 	}
 
 	r["user.getServerMetrics"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{}, nil
+		// 代理到本地 dokploy-monitoring 容器的 /metrics 端点
+		monitoringURL := "http://127.0.0.1:3001/metrics"
+		return proxyMonitoringRequest(monitoringURL)
 	}
 
 	r["user.session"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

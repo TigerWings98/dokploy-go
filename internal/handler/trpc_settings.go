@@ -17,6 +17,7 @@ import (
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
+	"gopkg.in/yaml.v3"
 )
 
 // treeDataItem 与 TS 版 TreeDataItem 一致的目录树结构
@@ -77,6 +78,19 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.haveTraefikDashboardPortEnabled"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		ports, err := h.readDockerPorts("dokploy-traefik", in.ServerID)
+		if err != nil {
+			return false, nil
+		}
+		for _, p := range ports {
+			if p.TargetPort == 8080 {
+				return true, nil
+			}
+		}
 		return false, nil
 	}
 
@@ -217,6 +231,11 @@ func (h *Handler) registerSettingsTRPC(r procedureRegistry) {
 	}
 
 	r["settings.reloadTraefik"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		go h.reloadDockerResource("dokploy-traefik", in.ServerID)
 		return true, nil
 	}
 
@@ -481,14 +500,27 @@ echo "$json_output"
 	}
 
 	r["settings.cleanAllDeploymentQueue"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		if h.Queue != nil {
+			h.Queue.CancelAllJobs()
+		}
 		return true, nil
 	}
 
 	r["settings.cleanRedis"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// 查找 dokploy-redis 容器并执行 FLUSHALL
+		result, err := process.ExecAsync(`docker ps --filter "name=dokploy-redis" --filter "status=running" -q | head -n 1`)
+		if err != nil || result == nil || strings.TrimSpace(result.Stdout) == "" {
+			return nil, &trpcErr{"Redis container not found", "INTERNAL_SERVER_ERROR", 500}
+		}
+		containerID := strings.TrimSpace(result.Stdout)
+		if _, err := process.ExecAsync(fmt.Sprintf("docker exec -i %s redis-cli flushall", containerID)); err != nil {
+			return nil, &trpcErr{err.Error(), "INTERNAL_SERVER_ERROR", 500}
+		}
 		return true, nil
 	}
 
 	r["settings.reloadRedis"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		go h.reloadDockerResource("dokploy-redis", nil)
 		return true, nil
 	}
 
@@ -501,7 +533,7 @@ echo "$json_output"
 
 		if in.EnableDashboard {
 			// 检查端口 8080 是否被占用（双层检测：Docker 容器 + 主机级服务）
-			conflictInfo, err := checkPortInUse(8080, in.ServerID)
+			conflictInfo, err := h.checkPortInUse(8080, in.ServerID)
 			if err == nil && conflictInfo != "" {
 				return nil, &trpcErr{
 					message: fmt.Sprintf("Port 8080 is already in use by %s. Please stop the conflicting service or use a different port for the Traefik dashboard.", conflictInfo),
@@ -589,42 +621,297 @@ echo "$json_output"
 	}
 
 	r["settings.readStats"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{}, nil
+		// 读取 Traefik access log 并按小时分组统计请求数
+		logPath := "/etc/dokploy/traefik/dynamic/access.log"
+		entries := readAccessLogEntries(logPath, false)
+		hourCounts := map[string]int{}
+		for _, e := range entries {
+			if t, ok := e["StartUTC"].(string); ok && len(t) >= 13 {
+				hour := t[:13] // "2024-01-15T14" 级别
+				hourCounts[hour]++
+			}
+		}
+		var stats []map[string]interface{}
+		for hour, count := range hourCounts {
+			stats = append(stats, map[string]interface{}{"hour": hour, "count": count})
+		}
+		if stats == nil {
+			stats = []map[string]interface{}{}
+		}
+		return stats, nil
 	}
 
 	r["settings.readStatsLogs"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{}, nil
+		var in struct {
+			Page     int    `json:"page"`
+			PageSize int    `json:"pageSize"`
+			Status   string `json:"status"`
+			Search   string `json:"search"`
+			Sort     string `json:"sort"`
+		}
+		json.Unmarshal(input, &in)
+		if in.Page <= 0 {
+			in.Page = 1
+		}
+		if in.PageSize <= 0 {
+			in.PageSize = 50
+		}
+		logPath := "/etc/dokploy/traefik/dynamic/access.log"
+		entries := readAccessLogEntries(logPath, true)
+
+		// 过滤
+		var filtered []map[string]interface{}
+		for _, e := range entries {
+			if in.Status != "" {
+				if s, ok := e["DownstreamStatus"].(float64); ok {
+					statusStr := fmt.Sprintf("%d", int(s))
+					if !strings.HasPrefix(statusStr, in.Status[:1]) {
+						continue
+					}
+				}
+			}
+			if in.Search != "" {
+				reqPath, _ := e["RequestPath"].(string)
+				if !strings.Contains(strings.ToLower(reqPath), strings.ToLower(in.Search)) {
+					continue
+				}
+			}
+			filtered = append(filtered, e)
+		}
+		totalCount := len(filtered)
+
+		// 分页
+		start := (in.Page - 1) * in.PageSize
+		end := start + in.PageSize
+		if start > len(filtered) {
+			start = len(filtered)
+		}
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		page := filtered[start:end]
+		if page == nil {
+			page = []map[string]interface{}{}
+		}
+		return map[string]interface{}{
+			"data":       page,
+			"totalCount": totalCount,
+		}, nil
 	}
 
 	r["settings.haveActivateRequests"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// 检查 Traefik 主配置是否启用了 accessLog
+		traefikPath := "/etc/dokploy/traefik/traefik.yml"
+		if h.Config != nil {
+			traefikPath = filepath.Join(h.Config.Paths.MainTraefikPath, "traefik.yml")
+		}
+		data, err := os.ReadFile(traefikPath)
+		if err != nil {
+			return false, nil
+		}
+		var cfg map[string]interface{}
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return false, nil
+		}
+		if al, ok := cfg["accessLog"]; ok && al != nil {
+			if alMap, ok := al.(map[string]interface{}); ok {
+				if _, ok := alMap["filePath"]; ok {
+					return true, nil
+				}
+			}
+		}
 		return false, nil
 	}
 
 	r["settings.toggleRequests"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			Enable bool `json:"enable"`
+		}
+		json.Unmarshal(input, &in)
+
+		traefikPath := "/etc/dokploy/traefik/traefik.yml"
+		if h.Config != nil {
+			traefikPath = filepath.Join(h.Config.Paths.MainTraefikPath, "traefik.yml")
+		}
+		data, err := os.ReadFile(traefikPath)
+		if err != nil {
+			return false, nil
+		}
+		var cfg map[string]interface{}
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return false, nil
+		}
+
+		if in.Enable {
+			accessLogPath := "/etc/dokploy/traefik/dynamic/access.log"
+			if h.Config != nil {
+				accessLogPath = filepath.Join(h.Config.Paths.DynamicTraefikPath, "access.log")
+			}
+			cfg["accessLog"] = map[string]interface{}{
+				"filePath":      accessLogPath,
+				"format":        "json",
+				"bufferingSize": 100,
+			}
+		} else {
+			delete(cfg, "accessLog")
+		}
+
+		out, err := yaml.Marshal(cfg)
+		if err != nil {
+			return false, nil
+		}
+		os.WriteFile(traefikPath, out, 0644)
 		return true, nil
 	}
 
 	r["settings.isUserSubscribed"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return false, nil
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return false, nil
+		}
+		var serverCount int64
+		h.DB.Model(&schema.Server{}).Where("\"organizationId\" = ?", member.OrganizationID).Count(&serverCount)
+		var projectCount int64
+		h.DB.Model(&schema.Project{}).Where("\"organizationId\" = ?", member.OrganizationID).Count(&projectCount)
+		return serverCount > 0 || projectCount > 0, nil
 	}
 
 	r["settings.setupGPU"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		// 检查 nvidia-smi 是否存在
+		checkCmd := "nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null || echo ''"
+		var gpuCountStr string
+		if in.ServerID != nil && *in.ServerID != "" {
+			gpuCountStr = h.execRemoteOrLocal(checkCmd, in.ServerID)
+		} else {
+			result, _ := process.ExecAsync(checkCmd)
+			if result != nil {
+				gpuCountStr = strings.TrimSpace(result.Stdout)
+			}
+		}
+		if gpuCountStr == "" || gpuCountStr == "0" {
+			return nil, &trpcErr{"NVIDIA driver not detected. Please install NVIDIA drivers first.", "BAD_REQUEST", 400}
+		}
+
+		// 配置 Docker daemon + Swarm GPU 资源
+		setupCmds := []string{
+			// 设置 nvidia-container-runtime
+			`mkdir -p /etc/nvidia-container-runtime && echo -e '[nvidia-container-cli]\nno-cgroups = true' > /etc/nvidia-container-runtime/config.toml`,
+			// 更新 daemon.json
+			fmt.Sprintf(`python3 -c "
+import json
+with open('/etc/docker/daemon.json','r') as f: d=json.load(f)
+d.setdefault('runtimes',{})['nvidia']={'path':'nvidia-container-runtime','runtimeArgs':[]}
+d['node-generic-resources']=['GPU=%s']
+with open('/etc/docker/daemon.json','w') as f: json.dump(d,f,indent=2)
+" 2>/dev/null || echo '{"runtimes":{"nvidia":{"path":"nvidia-container-runtime","runtimeArgs":[]}},"node-generic-resources":["GPU=%s"]}' > /etc/docker/daemon.json`, gpuCountStr, gpuCountStr),
+			"systemctl restart docker",
+		}
+		for _, cmd := range setupCmds {
+			if in.ServerID != nil && *in.ServerID != "" {
+				h.execRemoteOrLocal(cmd, in.ServerID)
+			} else {
+				process.ExecAsync(cmd)
+			}
+		}
 		return true, nil
 	}
 
 	r["settings.checkGPUStatus"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{"available": false}, nil
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		result := map[string]interface{}{"available": false}
+		checkCmd := "nvidia-smi --query-gpu=driver_version,count --format=csv,noheader 2>/dev/null || echo ''"
+		var out string
+		if in.ServerID != nil && *in.ServerID != "" {
+			out = h.execRemoteOrLocal(checkCmd, in.ServerID)
+		} else {
+			r, _ := process.ExecAsync(checkCmd)
+			if r != nil {
+				out = strings.TrimSpace(r.Stdout)
+			}
+		}
+		if out != "" && !strings.Contains(out, "command not found") {
+			parts := strings.Split(out, ", ")
+			if len(parts) >= 2 {
+				result["available"] = true
+				result["driverVersion"] = strings.TrimSpace(parts[0])
+				result["gpuCount"] = strings.TrimSpace(parts[1])
+			}
+		}
+		return result, nil
 	}
 
 	r["settings.updateTraefikPorts"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			AdditionalPorts []map[string]interface{} `json:"additionalPorts"`
+			ServerID        *string                  `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		// 检查端口冲突
+		for _, port := range in.AdditionalPorts {
+			if p, ok := port["targetPort"].(float64); ok {
+				conflict, _ := h.checkPortInUse(int(p), in.ServerID)
+				if conflict != "" {
+					return nil, &trpcErr{fmt.Sprintf("Port %d is in use by %s", int(p), conflict), "BAD_REQUEST", 400}
+				}
+			}
+		}
+		// 后台重建 Traefik 服务（添加端口）
+		go func() {
+			// 构建端口发布参数：默认 80:80 + 443:443 + 自定义端口
+			portArgs := "--publish-add published=80,target=80,protocol=tcp,mode=host " +
+				"--publish-add published=443,target=443,protocol=tcp,mode=host"
+			for _, port := range in.AdditionalPorts {
+				tp, _ := port["targetPort"].(float64)
+				pp, _ := port["publishedPort"].(float64)
+				proto := "tcp"
+				if p, ok := port["protocol"].(string); ok && p != "" {
+					proto = p
+				}
+				portArgs += fmt.Sprintf(" --publish-add published=%d,target=%d,protocol=%s,mode=host", int(pp), int(tp), proto)
+			}
+			cmd := fmt.Sprintf("docker service update --force %s dokploy-traefik", portArgs)
+			if in.ServerID != nil && *in.ServerID != "" {
+				h.execRemoteOrLocal(cmd, in.ServerID)
+			} else {
+				process.ExecAsync(cmd)
+			}
+		}()
 		return true, nil
 	}
 
 	r["settings.getTraefikPorts"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]int{
-			"httpPort":  80,
-			"httpsPort": 443,
-		}, nil
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		ports, err := h.readDockerPorts("dokploy-traefik", in.ServerID)
+		if err != nil {
+			return []interface{}{}, nil
+		}
+		// 过滤掉默认端口 80 和 443
+		var filtered []map[string]interface{}
+		for _, p := range ports {
+			if p.TargetPort != 80 && p.TargetPort != 443 {
+				filtered = append(filtered, map[string]interface{}{
+					"targetPort":    p.TargetPort,
+					"publishedPort": p.PublishedPort,
+					"protocol":      p.Protocol,
+				})
+			}
+		}
+		if filtered == nil {
+			filtered = []map[string]interface{}{}
+		}
+		return filtered, nil
 	}
 
 	r["settings.updateServer"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -719,7 +1006,64 @@ echo "$json_output"
 	}
 
 	r["admin.setupMonitoring"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		// 解析 metricsConfig 并写入 WebServerSettings
+		var in struct {
+			MetricsConfig json.RawMessage `json:"metricsConfig"`
+		}
+		json.Unmarshal(input, &in)
+
+		settings, err := h.getOrCreateSettings()
+		if err != nil {
+			return nil, err
+		}
+
+		// 将 metricsConfig.server.type 强制设为 "Dokploy"（TS 版逻辑）
+		var mc map[string]interface{}
+		json.Unmarshal(in.MetricsConfig, &mc)
+		if srv, ok := mc["server"].(map[string]interface{}); ok {
+			srv["type"] = "Dokploy"
+		}
+		mcJSON, _ := json.Marshal(mc)
+
+		// 更新数据库
+		h.DB.Model(settings).Update("metricsConfig", string(mcJSON))
+
+		// 提取端口号（默认 3001）
+		port := 3001
+		if srv, ok := mc["server"].(map[string]interface{}); ok {
+			if p, ok := srv["port"].(float64); ok && p > 0 {
+				port = int(p)
+			}
+		}
+
+		// 后台重新部署 dokploy-monitoring 容器（本地主服务器）
+		go func() {
+			configStr := strings.ReplaceAll(string(mcJSON), "'", "'\\''")
+			cmds := []string{
+				"mkdir -p /etc/dokploy/monitoring && touch /etc/dokploy/monitoring/monitoring.db",
+				"docker pull dokploy/monitoring:latest 2>/dev/null || true",
+				"docker rm -f dokploy-monitoring 2>/dev/null || true",
+				fmt.Sprintf(
+					`docker run -d --name dokploy-monitoring --restart always `+
+						`-e 'METRICS_CONFIG=%s' `+
+						`-p %d:%d `+
+						`-v /var/run/docker.sock:/var/run/docker.sock:ro `+
+						`-v /sys:/host/sys:ro `+
+						`-v /etc/os-release:/etc/os-release:ro `+
+						`-v /proc:/host/proc:ro `+
+						`-v /etc/dokploy/monitoring/monitoring.db:/app/monitoring.db `+
+						`dokploy/monitoring:latest`,
+					configStr, port, port,
+				),
+			}
+			for _, cmd := range cmds {
+				process.ExecAsync(cmd)
+			}
+		}()
+
+		// 返回更新后的 settings
+		h.DB.First(settings, "id = ?", settings.ID)
+		return settings, nil
 	}
 
 	r["auth.isAdminPresent"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -759,7 +1103,7 @@ func (h *Handler) execDockerCleanup(serverID *string, command string) {
 
 // checkPortInUse 双层端口冲突检测（与 TS v0.28.5 checkPortInUse 一致）
 // 返回冲突描述（空字符串表示未占用）
-func checkPortInUse(port int, serverID *string) (string, error) {
+func (h *Handler) checkPortInUse(port int, serverID *string) (string, error) {
 	// 层1：检查 Docker 容器是否占用端口
 	dockerCmd := fmt.Sprintf(
 		`docker ps -a --format '{{.Names}}' | grep -v '^dokploy-traefik$' | while read name; do docker port "$name" 2>/dev/null | grep -q ':%d' && echo "$name" && break; done || true`,
@@ -767,15 +1111,8 @@ func checkPortInUse(port int, serverID *string) (string, error) {
 	)
 
 	var dockerOut string
-	if serverID != nil {
-		// TODO: 远程执行需要 SSH 连接，暂用本地
-		result, err := process.ExecAsync(dockerCmd)
-		if err != nil {
-			return "", err
-		}
-		if result != nil {
-			dockerOut = result.Stdout
-		}
+	if serverID != nil && *serverID != "" {
+		dockerOut = h.execRemoteOrLocal(dockerCmd, serverID)
 	} else {
 		result, err := process.ExecAsync(dockerCmd)
 		if err != nil {
@@ -798,11 +1135,8 @@ func checkPortInUse(port int, serverID *string) (string, error) {
 	)
 
 	var hostOut string
-	if serverID != nil {
-		result, _ := process.ExecAsync(hostCmd)
-		if result != nil {
-			hostOut = result.Stdout
-		}
+	if serverID != nil && *serverID != "" {
+		hostOut = h.execRemoteOrLocal(hostCmd, serverID)
 	} else {
 		result, _ := process.ExecAsync(hostCmd)
 		if result != nil {
@@ -815,6 +1149,143 @@ func checkPortInUse(port int, serverID *string) (string, error) {
 	}
 
 	return "", nil
+}
+
+// reloadDockerResource 重启 Docker 服务或容器（与 TS reloadDockerResource 一致）
+func (h *Handler) reloadDockerResource(name string, serverID *string) {
+	// 尝试 service update --force（Swarm 模式），失败则 docker restart（standalone 模式）
+	cmd := fmt.Sprintf(`docker service update --force %s 2>/dev/null || docker restart %s 2>/dev/null || true`, name, name)
+	if serverID != nil && *serverID != "" {
+		h.execRemoteOrLocal(cmd, serverID)
+	} else {
+		process.ExecAsync(cmd)
+	}
+}
+
+// execRemoteOrLocal 在远程服务器或本地执行命令
+func (h *Handler) execRemoteOrLocal(cmd string, serverID *string) string {
+	if serverID != nil && *serverID != "" {
+		conn := h.getSSHConn(*serverID)
+		if conn != nil {
+			result, _ := process.ExecAsyncRemote(*conn, cmd, nil)
+			if result != nil {
+				return strings.TrimSpace(result.Stdout)
+			}
+			return ""
+		}
+		// SSH 连接获取失败，降级到本地执行
+	}
+	result, _ := process.ExecAsync(cmd)
+	if result != nil {
+		return strings.TrimSpace(result.Stdout)
+	}
+	return ""
+}
+
+// dockerPort 表示 Docker 端口映射
+type dockerPort struct {
+	TargetPort    int
+	PublishedPort int
+	Protocol      string
+}
+
+// readDockerPorts 读取 Docker 服务/容器的端口映射（与 TS readPorts 一致）
+func (h *Handler) readDockerPorts(name string, serverID *string) ([]dockerPort, error) {
+	// 先尝试 service inspect（Swarm 模式）
+	cmd := fmt.Sprintf(`docker service inspect %s --format '{{json .Endpoint.Ports}}' 2>/dev/null || docker inspect %s --format '{{json .NetworkSettings.Ports}}' 2>/dev/null || echo '[]'`, name, name)
+	var out string
+	if serverID != nil && *serverID != "" {
+		out = h.execRemoteOrLocal(cmd, serverID)
+	} else {
+		result, _ := process.ExecAsync(cmd)
+		if result != nil {
+			out = strings.TrimSpace(result.Stdout)
+		}
+	}
+	if out == "" || out == "[]" || out == "null" {
+		return nil, nil
+	}
+
+	// 尝试解析 Swarm 格式 [{TargetPort, PublishedPort, Protocol}]
+	var swarmPorts []struct {
+		TargetPort    int    `json:"TargetPort"`
+		PublishedPort int    `json:"PublishedPort"`
+		Protocol      string `json:"Protocol"`
+	}
+	if err := json.Unmarshal([]byte(out), &swarmPorts); err == nil && len(swarmPorts) > 0 {
+		var result []dockerPort
+		for _, p := range swarmPorts {
+			result = append(result, dockerPort{
+				TargetPort:    p.TargetPort,
+				PublishedPort: p.PublishedPort,
+				Protocol:      p.Protocol,
+			})
+		}
+		return result, nil
+	}
+
+	// 尝试解析 standalone 格式 {"port/proto": [{"HostPort": "..."}]}
+	var standalonePorts map[string][]struct {
+		HostPort string `json:"HostPort"`
+	}
+	if err := json.Unmarshal([]byte(out), &standalonePorts); err == nil {
+		var result []dockerPort
+		for key, bindings := range standalonePorts {
+			parts := strings.Split(key, "/")
+			targetPort := 0
+			proto := "tcp"
+			if len(parts) >= 1 {
+				fmt.Sscanf(parts[0], "%d", &targetPort)
+			}
+			if len(parts) >= 2 {
+				proto = parts[1]
+			}
+			for _, b := range bindings {
+				pubPort := 0
+				fmt.Sscanf(b.HostPort, "%d", &pubPort)
+				result = append(result, dockerPort{
+					TargetPort:    targetPort,
+					PublishedPort: pubPort,
+					Protocol:      proto,
+				})
+			}
+		}
+		return result, nil
+	}
+
+	return nil, nil
+}
+
+// readAccessLogEntries 读取 Traefik access log JSON 条目
+func readAccessLogEntries(logPath string, readAll bool) []map[string]interface{} {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	var entries []map[string]interface{}
+	maxLines := 500
+	if readAll {
+		maxLines = len(lines)
+	}
+	for i, line := range lines {
+		if !readAll && i >= maxLines {
+			break
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &entry); err == nil {
+			// 跳过 dokploy 内部服务的请求
+			if svc, ok := entry["ServiceName"].(string); ok && strings.Contains(svc, "dokploy-service-app") {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+	}
+	return entries
 }
 
 // getSSHConn 从 serverID 获取 SSH 连接参数

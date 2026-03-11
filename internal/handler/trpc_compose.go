@@ -238,10 +238,18 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	}
 
 	r["compose.cancelDeployment"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		// TS 版中仅 cloud 模式支持取消部署，self-hosted 不支持
+		return nil, &trpcErr{"Cancel deployment is only available in cloud mode", "BAD_REQUEST", 400}
 	}
 
 	r["compose.cleanQueues"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ComposeID string `json:"composeId"`
+		}
+		json.Unmarshal(input, &in)
+		if h.Queue != nil {
+			h.Queue.CancelJobsByFilter("composeId", in.ComposeID)
+		}
 		return true, nil
 	}
 
@@ -316,7 +324,21 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	}
 
 	r["compose.randomizeCompose"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		var in struct {
+			ComposeID string `json:"composeId"`
+		}
+		json.Unmarshal(input, &in)
+		var comp schema.Compose
+		if err := h.DB.First(&comp, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}
+		}
+		// 对 composeFile 中的 service/volume/network/config/secret 名称添加随机后缀
+		randomized, err := randomizeComposeFile(comp.ComposeFile)
+		if err != nil {
+			return nil, &trpcErr{fmt.Sprintf("Failed to randomize compose: %v", err), "BAD_REQUEST", 400}
+		}
+		h.DB.Model(&comp).Update("composeFile", randomized)
+		return randomized, nil
 	}
 
 	r["compose.isolatedDeployment"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -603,7 +625,92 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	}
 
 	r["compose.import"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		var in struct {
+			Base64    string `json:"base64"`
+			ComposeID string `json:"composeId"`
+		}
+		json.Unmarshal(input, &in)
+
+		var comp schema.Compose
+		if err := h.DB.Preload("Server").First(&comp, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}
+		}
+
+		// 清理已有的 mounts 和 domains
+		h.DB.Where("\"composeId\" = ?", in.ComposeID).Delete(&schema.Mount{})
+		h.DB.Where("\"composeId\" = ?", in.ComposeID).Delete(&schema.Domain{})
+
+		// 解码 base64 模板数据
+		decoded, err := base64Decode(in.Base64)
+		if err != nil {
+			return nil, &trpcErr{"Invalid base64 data", "BAD_REQUEST", 400}
+		}
+
+		var templateData struct {
+			Compose string         `json:"compose"`
+			Config  templateConfig `json:"config"`
+		}
+		if err := json.Unmarshal(decoded, &templateData); err != nil {
+			return nil, &trpcErr{"Invalid template data", "BAD_REQUEST", 400}
+		}
+
+		// 确定服务器 IP
+		serverIP := "127.0.0.1"
+		if comp.ServerID != nil && comp.Server != nil {
+			serverIP = comp.Server.IPAddress
+		} else {
+			settings, _ := h.getOrCreateSettings()
+			if settings != nil && settings.ServerIP != nil && *settings.ServerIP != "" {
+				serverIP = *settings.ServerIP
+			}
+		}
+
+		if templateData.Config.Variables == nil {
+			templateData.Config.Variables = map[string]string{}
+		}
+		templateData.Config.Variables["APP_NAME"] = comp.AppName
+		processed := processTemplateConfig(templateData.Config, serverIP, comp.AppName)
+
+		// 更新 compose 记录
+		isolatedDeploy := true
+		h.DB.Model(&comp).Updates(map[string]interface{}{
+			"\"composeFile\"":        templateData.Compose,
+			"\"sourceType\"":         "raw",
+			"\"env\"":                processed.Env,
+			"\"isolatedDeployment\"": isolatedDeploy,
+		})
+
+		// 创建 mounts
+		for _, mount := range processed.Mounts {
+			fp := mount.FilePath
+			m := schema.Mount{
+				FilePath:  &fp,
+				MountPath: "",
+				Content:   &mount.Content,
+				ComposeID: &comp.ComposeID,
+				Type:      schema.MountTypeFile,
+			}
+			h.DB.Create(&m)
+		}
+
+		// 创建 domains
+		for _, domain := range processed.Domains {
+			d := schema.Domain{
+				Host:        domain.Host,
+				Port:        &domain.Port,
+				ServiceName: &domain.ServiceName,
+				ComposeID:   &comp.ComposeID,
+			}
+			if domain.Path != "" {
+				d.Path = &domain.Path
+			}
+			h.DB.Create(&d)
+		}
+
+		return map[string]interface{}{
+			"success": true,
+			"message": "Template imported successfully",
+		}, nil
 	}
 
 	r["compose.search"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -840,6 +947,108 @@ func generateUUID() string {
 
 func base64Decode(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// randomizeComposeFile 解析 YAML compose 文件，为 service/volume/network/config/secret 名称添加随机后缀
+// 与 TS 版 randomizeCompose 逻辑一致
+func randomizeComposeFile(composeContent string) (string, error) {
+	if strings.TrimSpace(composeContent) == "" {
+		return "", fmt.Errorf("compose file is empty")
+	}
+
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal([]byte(composeContent), &doc); err != nil {
+		return "", fmt.Errorf("invalid YAML: %v", err)
+	}
+
+	suffix, _ := gonanoid.Generate("abcdefghijklmnopqrstuvwxyz0123456789", 4)
+	nameMap := map[string]string{} // oldName -> newName
+
+	// 对 services, volumes, networks, configs, secrets 的键名添加后缀
+	for _, section := range []string{"services", "volumes", "networks", "configs", "secrets"} {
+		sectionData, ok := doc[section]
+		if !ok {
+			continue
+		}
+		sectionMap, ok := sectionData.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		newSection := map[string]interface{}{}
+		for name, value := range sectionMap {
+			newName := name + "-" + suffix
+			nameMap[name] = newName
+			newSection[newName] = value
+		}
+		doc[section] = newSection
+	}
+
+	// 更新 services 中对 volumes/networks/configs/secrets 的引用
+	if services, ok := doc["services"].(map[string]interface{}); ok {
+		for _, svc := range services {
+			svcMap, ok := svc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// 更新 depends_on
+			if deps, ok := svcMap["depends_on"]; ok {
+				svcMap["depends_on"] = replaceRefs(deps, nameMap)
+			}
+			// 更新 volumes 引用
+			if vols, ok := svcMap["volumes"].([]interface{}); ok {
+				for i, v := range vols {
+					if s, ok := v.(string); ok {
+						parts := strings.SplitN(s, ":", 2)
+						if newName, found := nameMap[parts[0]]; found {
+							parts[0] = newName
+							vols[i] = strings.Join(parts, ":")
+						}
+					}
+				}
+			}
+			// 更新 networks 引用
+			if nets, ok := svcMap["networks"]; ok {
+				svcMap["networks"] = replaceRefs(nets, nameMap)
+			}
+		}
+	}
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// replaceRefs 替换 YAML 中的名称引用（支持 list 和 map 格式）
+func replaceRefs(data interface{}, nameMap map[string]string) interface{} {
+	switch v := data.(type) {
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			if s, ok := item.(string); ok {
+				if newName, found := nameMap[s]; found {
+					result[i] = newName
+				} else {
+					result[i] = s
+				}
+			} else {
+				result[i] = item
+			}
+		}
+		return result
+	case map[string]interface{}:
+		result := map[string]interface{}{}
+		for key, val := range v {
+			if newName, found := nameMap[key]; found {
+				result[newName] = val
+			} else {
+				result[key] = val
+			}
+		}
+		return result
+	}
+	return data
 }
 
 func slugify(s string) string {

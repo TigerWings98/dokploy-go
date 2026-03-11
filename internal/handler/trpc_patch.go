@@ -6,6 +6,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -326,6 +327,20 @@ func (h *Handler) registerPatchTRPC(r procedureRegistry) {
 	}
 
 	r["patch.cleanPatchRepos"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		patchPath := "/etc/dokploy/patch-repos"
+		if h.Config != nil {
+			patchPath = h.Config.Paths.PatchReposPath
+		}
+		cmd := fmt.Sprintf(`rm -rf "%s"/* 2>/dev/null || true`, patchPath)
+		if in.ServerID != nil && *in.ServerID != "" {
+			h.execRemoteOrLocal(cmd, in.ServerID)
+		} else {
+			process.ExecAsync(cmd)
+		}
 		return true, nil
 	}
 }

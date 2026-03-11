@@ -236,6 +236,56 @@ func (q *Queue) EnqueueBackupRun(backupID string) (*asynq.TaskInfo, error) {
 	return q.client.Enqueue(task, asynq.Queue("backups"), asynq.MaxRetry(1))
 }
 
+// CancelAllJobs 取消所有队列中的待处理和排队任务
+func (q *Queue) CancelAllJobs() {
+	for _, queueName := range []string{"deployments", "backups", "maintenance"} {
+		// 取消 pending 任务
+		if tasks, err := q.inspector.ListPendingTasks(queueName); err == nil {
+			for _, t := range tasks {
+				_ = q.inspector.DeleteTask(queueName, t.ID)
+			}
+		}
+		// 取消 scheduled 任务
+		if tasks, err := q.inspector.ListScheduledTasks(queueName); err == nil {
+			for _, t := range tasks {
+				_ = q.inspector.DeleteTask(queueName, t.ID)
+			}
+		}
+		// 取消 retry 任务
+		if tasks, err := q.inspector.ListRetryTasks(queueName); err == nil {
+			for _, t := range tasks {
+				_ = q.inspector.DeleteTask(queueName, t.ID)
+			}
+		}
+	}
+}
+
+// CancelJobsByFilter 取消匹配过滤条件的任务（用于按 applicationId/composeId 清理）
+func (q *Queue) CancelJobsByFilter(filterKey, filterValue string) int {
+	deleted := 0
+	for _, queueName := range []string{"deployments", "backups", "maintenance"} {
+		for _, listFn := range []func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error){
+			q.inspector.ListPendingTasks,
+			q.inspector.ListScheduledTasks,
+			q.inspector.ListRetryTasks,
+		} {
+			if tasks, err := listFn(queueName); err == nil {
+				for _, t := range tasks {
+					var payload map[string]interface{}
+					if json.Unmarshal(t.Payload, &payload) == nil {
+						if v, ok := payload[filterKey].(string); ok && v == filterValue {
+							if q.inspector.DeleteTask(queueName, t.ID) == nil {
+								deleted++
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return deleted
+}
+
 // EnqueueDockerCleanup enqueues a Docker cleanup task.
 func (q *Queue) EnqueueDockerCleanup() (*asynq.TaskInfo, error) {
 	task := asynq.NewTask(TaskDockerCleanup, nil)

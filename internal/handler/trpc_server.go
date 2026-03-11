@@ -7,6 +7,8 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -320,18 +322,75 @@ echo "{\"ufw\": $ufwStatus, \"ssh\": $sshStatus, \"fail2ban\": $fail2banStatus}"
 	}
 
 	r["server.setupMonitoring"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+		var in struct {
+			ServerID      string          `json:"serverId"`
+			MetricsConfig json.RawMessage `json:"metricsConfig"`
+		}
+		json.Unmarshal(input, &in)
+
+		var srv schema.Server
+		if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", in.ServerID).Error; err != nil {
+			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
+		}
+
+		// 将 metricsConfig.server.type 强制设为 "Remote"（TS 版逻辑）
+		var mc map[string]interface{}
+		json.Unmarshal(in.MetricsConfig, &mc)
+		if srvCfg, ok := mc["server"].(map[string]interface{}); ok {
+			srvCfg["type"] = "Remote"
+		}
+		mcJSON, _ := json.Marshal(mc)
+
+		// 更新 Server 表的 metricsConfig
+		h.DB.Model(&srv).Update("metricsConfig", string(mcJSON))
+
+		// 后台在远程服务器部署 dokploy-monitoring 容器（远程用 --network host，端口由 metricsConfig 内部配置）
+		go func() {
+			sid := in.ServerID
+			configStr := strings.ReplaceAll(string(mcJSON), "'", "'\\''")
+			cmds := []string{
+				"mkdir -p /etc/dokploy/monitoring && touch /etc/dokploy/monitoring/monitoring.db",
+				"docker pull dokploy/monitoring:latest 2>/dev/null || true",
+				"docker rm -f dokploy-monitoring 2>/dev/null || true",
+				fmt.Sprintf(
+					`docker run -d --name dokploy-monitoring --restart always `+
+						`--network host `+
+						`-e 'METRICS_CONFIG=%s' `+
+						`-v /var/run/docker.sock:/var/run/docker.sock:ro `+
+						`-v /sys:/host/sys:ro `+
+						`-v /etc/os-release:/etc/os-release:ro `+
+						`-v /proc:/host/proc:ro `+
+						`-v /etc/dokploy/monitoring/monitoring.db:/app/monitoring.db `+
+						`dokploy/monitoring:latest`,
+					configStr,
+				),
+			}
+			for _, cmd := range cmds {
+				h.execRemoteOrLocal(cmd, &sid)
+			}
+		}()
+
+		// 返回更新后的 server
+		h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", in.ServerID)
+		return srv, nil
 	}
 
 	r["server.getServerMetrics"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{
-			"cpuUsage":    []interface{}{},
-			"memoryUsage": []interface{}{},
-			"diskUsage":   []interface{}{},
-		}, nil
+		var in struct {
+			ServerID string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		var srv schema.Server
+		if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", in.ServerID).Error; err != nil {
+			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
+		}
+		// 代理到远程服务器上 dokploy-monitoring 容器的 /metrics 端点
+		monitoringURL := fmt.Sprintf("http://%s:3001/metrics", srv.IPAddress)
+		return proxyMonitoringRequest(monitoringURL)
 	}
 
 	r["server.setup"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// TS 版中 server.setup 仅用于 cloud 部署（self-hosted 不需要），直接返回 true
 		return true, nil
 	}
 
@@ -364,4 +423,28 @@ echo "{\"ufw\": $ufwStatus, \"ssh\": $sshStatus, \"fail2ban\": $fail2banStatus}"
 			Find(&servers)
 		return servers, nil
 	}
+}
+
+// proxyMonitoringRequest 代理请求到 dokploy-monitoring 容器
+func proxyMonitoringRequest(url string) (interface{}, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return map[string]interface{}{
+			"cpuUsage":    []interface{}{},
+			"memoryUsage": []interface{}{},
+			"diskUsage":   []interface{}{},
+		}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result interface{}
+	if json.Unmarshal(body, &result) != nil {
+		return map[string]interface{}{
+			"cpuUsage":    []interface{}{},
+			"memoryUsage": []interface{}{},
+			"diskUsage":   []interface{}{},
+		}, nil
+	}
+	return result, nil
 }

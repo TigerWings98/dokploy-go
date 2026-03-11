@@ -402,6 +402,40 @@ func sendTeams(notif *schema.Notification, payload NotificationPayload) error {
 	return postJSON(notif.Teams.WebhookURL, body)
 }
 
+// SendEmailToRecipient 通过指定通知渠道的 Email/Resend 配置发送邮件到指定收件人
+// 用于邀请邮件等场景，覆盖通知原有的 toAddresses
+func (n *Notifier) SendEmailToRecipient(notificationID string, toEmail string, subject string, htmlContent string) error {
+	var notif schema.Notification
+	if err := n.preloadAll().First(&notif, "\"notificationId\" = ?", notificationID).Error; err != nil {
+		return fmt.Errorf("notification not found: %w", err)
+	}
+
+	payload := NotificationPayload{
+		Title:    subject,
+		Message:  htmlContent,
+		HTMLBody: htmlContent,
+	}
+
+	if notif.Email != nil {
+		// 临时覆盖收件人
+		origAddrs := notif.Email.ToAddresses
+		notif.Email.ToAddresses = []string{toEmail}
+		err := sendEmail(&notif, payload)
+		notif.Email.ToAddresses = origAddrs
+		return err
+	}
+
+	if notif.Resend != nil {
+		origAddrs := notif.Resend.ToAddresses
+		notif.Resend.ToAddresses = []string{toEmail}
+		err := sendResend(&notif, payload)
+		notif.Resend.ToAddresses = origAddrs
+		return err
+	}
+
+	return fmt.Errorf("notification has no email or resend provider configured")
+}
+
 func postJSON(url string, body interface{}) error {
 	data, err := json.Marshal(body)
 	if err != nil {

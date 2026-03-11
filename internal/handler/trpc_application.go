@@ -242,7 +242,7 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		"saveGithubProvider", "saveGitlabProvider", "saveBitbucketProvider",
 		"saveGiteaProvider", "saveDockerProvider", "saveGitProvider",
 		"disconnectGitProvider", "markRunning",
-		"updateTraefikConfig", "cancelDeployment", "cleanQueues",
+		"updateTraefikConfig",
 	} {
 		procName := proc
 		r["application."+procName] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -260,6 +260,22 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 			}
 			return app, nil
 		}
+	}
+
+	r["application.cancelDeployment"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// TS 版中仅 cloud 模式支持取消部署，self-hosted 不支持
+		return nil, &trpcErr{"Cancel deployment is only available in cloud mode", "BAD_REQUEST", 400}
+	}
+
+	r["application.cleanQueues"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ApplicationID string `json:"applicationId"`
+		}
+		json.Unmarshal(input, &in)
+		if h.Queue != nil {
+			h.Queue.CancelJobsByFilter("applicationId", in.ApplicationID)
+		}
+		return true, nil
 	}
 
 	r["application.readTraefikConfig"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

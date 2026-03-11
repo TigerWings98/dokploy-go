@@ -1,14 +1,19 @@
-// Input: echo, encoding/json, schema
-// Output: Stub procedure 实现 (Stripe/AI/LicenseKey/Cluster/Swarm 企业功能)
-// Role: 企业功能 stub 层，为自托管模式提供无操作的 tRPC procedure 响应，避免前端报错
+// Input: echo, encoding/json, schema, docker, process
+// Output: Stub procedure 实现 (Stripe/AI/LicenseKey 企业功能) + Cluster/Swarm 实现
+// Role: 企业功能 stub 层 + Docker Swarm 集群管理 tRPC procedure
 // 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/docker/docker/api/types"
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 )
 
@@ -54,32 +59,175 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	// Cluster stubs (requires Docker Swarm)
-	r["cluster.addManager"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return "", nil
-	}
+	// ── Cluster（Docker Swarm 集群管理）──
+
 	r["cluster.addWorker"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return "", nil
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		return h.getSwarmJoinCommand(in.ServerID, false)
 	}
+
+	r["cluster.addManager"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		return h.getSwarmJoinCommand(in.ServerID, true)
+	}
+
 	r["cluster.getNodes"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+
+		if in.ServerID != nil && *in.ServerID != "" {
+			// 远程服务器：通过 CLI 获取节点列表
+			out := h.execRemoteOrLocal(`docker node ls --format '{{json .}}'`, in.ServerID)
+			return parseJSONLines(out), nil
+		}
+		// 本地：使用 Docker SDK
+		if h.Docker == nil {
+			return []interface{}{}, nil
+		}
+		nodes, err := h.Docker.DockerClient().NodeList(context.Background(), types.NodeListOptions{})
+		if err != nil {
+			return []interface{}{}, nil
+		}
+		return nodes, nil
 	}
+
 	r["cluster.removeWorker"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			NodeID   string  `json:"nodeId"`
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		if in.NodeID == "" {
+			return nil, &trpcErr{"Node ID is required", "BAD_REQUEST", 400}
+		}
+		// 先排空节点，再强制移除
+		drainCmd := fmt.Sprintf("docker node update --availability drain %s", in.NodeID)
+		removeCmd := fmt.Sprintf("docker node rm %s --force", in.NodeID)
+		if in.ServerID != nil && *in.ServerID != "" {
+			h.execRemoteOrLocal(drainCmd, in.ServerID)
+			h.execRemoteOrLocal(removeCmd, in.ServerID)
+		} else {
+			process.ExecAsync(drainCmd)
+			process.ExecAsync(removeCmd)
+		}
 		return true, nil
 	}
 
-	// Swarm stubs
+	// ── Swarm（Swarm 面板，节点/服务查看）──
+
 	r["swarm.getNodes"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		cmd := `docker node ls --format '{{json .}}'`
+		var out string
+		if in.ServerID != nil && *in.ServerID != "" {
+			out = h.execRemoteOrLocal(cmd, in.ServerID)
+		} else {
+			result, _ := process.ExecAsync(cmd)
+			if result != nil {
+				out = result.Stdout
+			}
+		}
+		return parseJSONLines(out), nil
 	}
+
 	r["swarm.getNodeInfo"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return map[string]interface{}{}, nil
+		var in struct {
+			NodeID   string  `json:"nodeId"`
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		if in.NodeID == "" {
+			return nil, &trpcErr{"Node ID is required", "BAD_REQUEST", 400}
+		}
+		cmd := fmt.Sprintf(`docker node inspect %s --format '{{json .}}'`, in.NodeID)
+		var out string
+		if in.ServerID != nil && *in.ServerID != "" {
+			out = h.execRemoteOrLocal(cmd, in.ServerID)
+		} else {
+			result, _ := process.ExecAsync(cmd)
+			if result != nil {
+				out = result.Stdout
+			}
+		}
+		out = strings.TrimSpace(out)
+		if out == "" {
+			return map[string]interface{}{}, nil
+		}
+		var info interface{}
+		if json.Unmarshal([]byte(out), &info) != nil {
+			return map[string]interface{}{}, nil
+		}
+		return info, nil
 	}
+
 	r["swarm.getNodeApps"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		cmd := `docker service ls --format '{{json .}}'`
+		var out string
+		if in.ServerID != nil && *in.ServerID != "" {
+			out = h.execRemoteOrLocal(cmd, in.ServerID)
+		} else {
+			result, _ := process.ExecAsync(cmd)
+			if result != nil {
+				out = result.Stdout
+			}
+		}
+		// 过滤掉 dokploy-* 内部服务
+		all := parseJSONLines(out)
+		var filtered []interface{}
+		for _, item := range all {
+			if m, ok := item.(map[string]interface{}); ok {
+				name, _ := m["Name"].(string)
+				if name == "" {
+					name, _ = m["name"].(string)
+				}
+				if strings.HasPrefix(name, "dokploy-") {
+					continue
+				}
+			}
+			filtered = append(filtered, item)
+		}
+		if filtered == nil {
+			filtered = []interface{}{}
+		}
+		return filtered, nil
 	}
+
 	r["swarm.getAppInfos"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return []interface{}{}, nil
+		var in struct {
+			AppName  []string `json:"appName"`
+			ServerID *string  `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		if len(in.AppName) == 0 {
+			return []interface{}{}, nil
+		}
+		names := strings.Join(in.AppName, " ")
+		cmd := fmt.Sprintf(`docker service ps %s --format '{{json .}}' --no-trunc`, names)
+		var out string
+		if in.ServerID != nil && *in.ServerID != "" {
+			out = h.execRemoteOrLocal(cmd, in.ServerID)
+		} else {
+			result, _ := process.ExecAsync(cmd)
+			if result != nil {
+				out = result.Stdout
+			}
+		}
+		return parseJSONLines(out), nil
 	}
 
 	// AI stubs
@@ -161,8 +309,83 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 		return true, nil
 	}
 
-	// Admin
-	r["admin.setupMonitoring"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		return true, nil
+}
+
+// getSwarmJoinCommand 获取 Docker Swarm 加入命令（manager 或 worker）
+func (h *Handler) getSwarmJoinCommand(serverID *string, manager bool) (interface{}, error) {
+	if serverID != nil && *serverID != "" {
+		// 远程服务器：通过 CLI 获取
+		tokenType := "worker"
+		if manager {
+			tokenType = "manager"
+		}
+		tokenCmd := fmt.Sprintf("docker swarm join-token %s -q", tokenType)
+		token := strings.TrimSpace(h.execRemoteOrLocal(tokenCmd, serverID))
+
+		ipCmd := "hostname -I | awk '{print $1}'"
+		ip := strings.TrimSpace(h.execRemoteOrLocal(ipCmd, serverID))
+
+		versionCmd := "docker version --format '{{.Server.Version}}'"
+		version := strings.TrimSpace(h.execRemoteOrLocal(versionCmd, serverID))
+
+		if token == "" {
+			return nil, &trpcErr{"Failed to get swarm join token. Is this node a swarm manager?", "BAD_REQUEST", 400}
+		}
+		return map[string]string{
+			"command": fmt.Sprintf("docker swarm join --token %s %s:2377", token, ip),
+			"version": version,
+		}, nil
 	}
+
+	// 本地：使用 Docker SDK
+	if h.Docker == nil {
+		return nil, &trpcErr{"Docker client not available", "INTERNAL_SERVER_ERROR", 500}
+	}
+	ctx := context.Background()
+	info, err := h.Docker.DockerClient().SwarmInspect(ctx)
+	if err != nil {
+		return nil, &trpcErr{fmt.Sprintf("Failed to inspect swarm: %v", err), "BAD_REQUEST", 400}
+	}
+
+	token := info.JoinTokens.Worker
+	if manager {
+		token = info.JoinTokens.Manager
+	}
+
+	// 获取本机 IP
+	sysInfo, _ := h.Docker.DockerClient().Info(ctx)
+	ip := sysInfo.Swarm.NodeAddr
+	if ip == "" {
+		// 降级：从命令行获取
+		result, _ := process.ExecAsync("hostname -I | awk '{print $1}'")
+		if result != nil {
+			ip = strings.TrimSpace(result.Stdout)
+		}
+	}
+
+	version := sysInfo.ServerVersion
+
+	return map[string]string{
+		"command": fmt.Sprintf("docker swarm join --token %s %s:2377", token, ip),
+		"version": version,
+	}, nil
+}
+
+// parseJSONLines 解析多行 JSON 输出（每行一个 JSON 对象），返回 []interface{}
+func parseJSONLines(output string) []interface{} {
+	var results []interface{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var obj interface{}
+		if json.Unmarshal([]byte(line), &obj) == nil {
+			results = append(results, obj)
+		}
+	}
+	if results == nil {
+		results = []interface{}{}
+	}
+	return results
 }

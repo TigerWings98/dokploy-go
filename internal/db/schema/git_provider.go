@@ -70,13 +70,13 @@ type Gitlab struct {
 	GitlabID          string  `gorm:"column:gitlabId;primaryKey;type:text" json:"gitlabId"`
 	GitlabURL         string  `gorm:"column:gitlabUrl;type:text;not null;default:'https://gitlab.com'" json:"gitlabUrl"`
 	GitlabInternalURL *string `gorm:"column:gitlabInternalUrl;type:text" json:"gitlabInternalUrl"`
-	ApplicationID     *string `gorm:"column:applicationId;type:text" json:"applicationId"`
-	RedirectURI       *string `gorm:"column:redirectUri;type:text" json:"redirectUri"`
+	ApplicationID     *string `gorm:"column:application_id;type:text" json:"applicationId"`
+	RedirectURI       *string `gorm:"column:redirect_uri;type:text" json:"redirectUri"`
 	Secret            *string `gorm:"column:secret;type:text" json:"secret"`
-	GroupName         *string `gorm:"column:groupName;type:text" json:"groupName"`
-	AccessToken       *string `gorm:"column:accessToken;type:text" json:"accessToken"`
-	RefreshToken      *string `gorm:"column:refreshToken;type:text" json:"refreshToken"`
-	ExpiresAt         *int    `gorm:"column:expiresAt" json:"expiresAt"`
+	GroupName         *string `gorm:"column:group_name;type:text" json:"groupName"`
+	AccessToken       *string `gorm:"column:access_token;type:text" json:"accessToken"`
+	RefreshToken      *string `gorm:"column:refresh_token;type:text" json:"refreshToken"`
+	ExpiresAt         *int    `gorm:"column:expires_at" json:"expiresAt"`
 	GitProviderID     string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
 	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitProvider,omitempty"`
@@ -118,14 +118,14 @@ type Gitea struct {
 	GiteaID             string  `gorm:"column:giteaId;primaryKey;type:text" json:"giteaId"`
 	GiteaURL            string  `gorm:"column:giteaUrl;type:text;not null;default:'https://gitea.com'" json:"giteaUrl"`
 	GiteaInternalURL    *string `gorm:"column:giteaInternalUrl;type:text" json:"giteaInternalUrl"`
-	RedirectURI         *string `gorm:"column:redirectUri;type:text" json:"redirectUri"`
-	ClientID            *string `gorm:"column:clientId;type:text" json:"clientId"`
-	ClientSecret        *string `gorm:"column:clientSecret;type:text" json:"clientSecret"`
-	AccessToken         *string `gorm:"column:accessToken;type:text" json:"accessToken"`
-	RefreshToken        *string `gorm:"column:refreshToken;type:text" json:"refreshToken"`
-	ExpiresAt           *int    `gorm:"column:expiresAt" json:"expiresAt"`
+	RedirectURI         *string `gorm:"column:redirect_uri;type:text" json:"redirectUri"`
+	ClientID            *string `gorm:"column:client_id;type:text" json:"clientId"`
+	ClientSecret        *string `gorm:"column:client_secret;type:text" json:"clientSecret"`
+	AccessToken         *string `gorm:"column:access_token;type:text" json:"accessToken"`
+	RefreshToken        *string `gorm:"column:refresh_token;type:text" json:"refreshToken"`
+	ExpiresAt           *int    `gorm:"column:expires_at" json:"expiresAt"`
 	Scopes              *string `gorm:"column:scopes;type:text;default:'repo,repo:status,read:user,read:org'" json:"scopes"`
-	LastAuthenticatedAt *int    `gorm:"column:lastAuthenticatedAt" json:"lastAuthenticatedAt"`
+	LastAuthenticatedAt *int    `gorm:"column:last_authenticated_at" json:"lastAuthenticatedAt"`
 	GitProviderID       string  `gorm:"column:gitProviderId;type:text;not null" json:"gitProviderId"`
 
 	GitProvider *GitProvider `gorm:"foreignKey:GitProviderID;references:GitProviderID" json:"gitProvider,omitempty"`

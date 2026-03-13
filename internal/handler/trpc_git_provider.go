@@ -102,6 +102,7 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["githubId"].(string)
 		delete(in, "githubId")
+		in = h.filterColumns(&schema.Github{}, in)
 		h.DB.Model(&schema.Github{}).Where("\"githubId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -191,6 +192,7 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["gitlabId"].(string)
 		delete(in, "gitlabId")
+		in = h.filterColumns(&schema.Gitlab{}, in)
 		h.DB.Model(&schema.Gitlab{}).Where("\"gitlabId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -341,6 +343,7 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["bitbucketId"].(string)
 		delete(in, "bitbucketId")
+		in = h.filterColumns(&schema.Bitbucket{}, in)
 		h.DB.Model(&schema.Bitbucket{}).Where("\"bitbucketId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -488,6 +491,7 @@ func (h *Handler) registerGitProviderTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["giteaId"].(string)
 		delete(in, "giteaId")
+		in = h.filterColumns(&schema.Gitea{}, in)
 		h.DB.Model(&schema.Gitea{}).Where("\"giteaId\" = ?", id).Updates(in)
 		return true, nil
 	}

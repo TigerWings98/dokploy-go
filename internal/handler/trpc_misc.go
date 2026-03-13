@@ -72,6 +72,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["destinationId"].(string)
 		delete(in, "destinationId")
+		in = h.filterColumns(&schema.Destination{}, in)
 		var dest schema.Destination
 		if err := h.DB.First(&dest, "\"destinationId\" = ?", id).Error; err != nil {
 			return nil, &trpcErr{"Destination not found", "NOT_FOUND", 404}
@@ -155,6 +156,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["mountId"].(string)
 		delete(in, "mountId")
+		in = h.filterColumns(&schema.Mount{}, in)
 		h.DB.Model(&schema.Mount{}).Where("\"mountId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -269,6 +271,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["portId"].(string)
 		delete(in, "portId")
+		in = h.filterColumns(&schema.Port{}, in)
 		h.DB.Model(&schema.Port{}).Where("\"portId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -309,6 +312,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["redirectId"].(string)
 		delete(in, "redirectId")
+		in = h.filterColumns(&schema.Redirect{}, in)
 		h.DB.Model(&schema.Redirect{}).Where("\"redirectId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -349,6 +353,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["securityId"].(string)
 		delete(in, "securityId")
+		in = h.filterColumns(&schema.Security{}, in)
 		h.DB.Model(&schema.Security{}).Where("\"securityId\" = ?", id).Updates(in)
 		return true, nil
 	}
@@ -415,6 +420,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["domainId"].(string)
 		delete(in, "domainId")
+		in = h.filterColumns(&schema.Domain{}, in)
 		h.DB.Model(&schema.Domain{}).Where("\"domainId\" = ?", id).Updates(in)
 
 		// 更新后重新生成 Traefik 配置（与 TS 版 manageDomain 一致）
@@ -596,6 +602,7 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["registryId"].(string)
 		delete(in, "registryId")
+		in = h.filterColumns(&schema.Registry{}, in)
 		h.DB.Model(&schema.Registry{}).Where("\"registryId\" = ?", id).Updates(in)
 		return true, nil
 	}

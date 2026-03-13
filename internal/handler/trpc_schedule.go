@@ -54,6 +54,7 @@ func (h *Handler) registerScheduleTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["scheduleId"].(string)
 		delete(in, "scheduleId")
+		in = h.filterColumns(&schema.Schedule{}, in)
 
 		var s schema.Schedule
 		if err := h.DB.First(&s, "\"scheduleId\" = ?", id).Error; err != nil {

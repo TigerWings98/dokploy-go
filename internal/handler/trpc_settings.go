@@ -980,6 +980,7 @@ with open('/etc/docker/daemon.json','w') as f: json.dump(d,f,indent=2)
 	r["settings.updateLogCleanup"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
+		in = h.filterColumns(&schema.WebServerSettings{}, in)
 		settings, _ := h.getOrCreateSettings()
 		if settings != nil {
 			h.DB.Model(settings).Updates(in)

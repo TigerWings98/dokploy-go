@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"gorm.io/gorm"
 )
 
 // --- tRPC protocol types ---
@@ -333,4 +334,25 @@ func (h *Handler) buildSubscriptionRegistry() subscriptionRegistry {
 	s := make(subscriptionRegistry)
 	h.registerSubscriptionsTRPC(s)
 	return s
+}
+
+// filterColumns 过滤 map，只保留 GORM model 中实际存在的列名。
+// TS 版通过 Zod schema 验证自动过滤无关字段（如前端可能发送 mongoId/mysqlId 等不属于当前表的 ID），
+// Go 版需要显式过滤，否则 GORM Updates(map) 会尝试写入不存在的列导致 SQL 错误。
+func (h *Handler) filterColumns(model interface{}, data map[string]interface{}) map[string]interface{} {
+	stmt := &gorm.Statement{DB: h.DB.DB}
+	if err := stmt.Parse(model); err != nil {
+		return data
+	}
+	validCols := make(map[string]bool, len(stmt.Schema.Fields))
+	for _, field := range stmt.Schema.Fields {
+		validCols[field.DBName] = true
+	}
+	filtered := make(map[string]interface{}, len(data))
+	for k, v := range data {
+		if validCols[k] {
+			filtered[k] = v
+		}
+	}
+	return filtered
 }

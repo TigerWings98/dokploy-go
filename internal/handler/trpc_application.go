@@ -143,6 +143,8 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		appID, _ := in["applicationId"].(string)
 		delete(in, "applicationId")
+		// 过滤不属于 application 表的字段（前端可能发送 composeId/mongoId 等无关 ID）
+		in = h.filterColumns(&schema.Application{}, in)
 
 		var app schema.Application
 		if err := h.DB.First(&app, "\"applicationId\" = ?", appID).Error; err != nil {
@@ -250,6 +252,7 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 			json.Unmarshal(input, &in)
 			appID, _ := in["applicationId"].(string)
 			delete(in, "applicationId")
+			in = h.filterColumns(&schema.Application{}, in)
 
 			var app schema.Application
 			if err := h.DB.First(&app, "\"applicationId\" = ?", appID).Error; err != nil {

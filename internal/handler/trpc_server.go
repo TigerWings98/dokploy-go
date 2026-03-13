@@ -79,6 +79,7 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		serverID, _ := in["serverId"].(string)
 		delete(in, "serverId")
+		in = h.filterColumns(&schema.Server{}, in)
 		var server schema.Server
 		if err := h.DB.First(&server, "\"serverId\" = ?", serverID).Error; err != nil {
 			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}

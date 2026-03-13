@@ -67,6 +67,8 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry) {
 			json.Unmarshal(input, &in)
 			id, _ := in[d.idField].(string)
 			delete(in, d.idField)
+			// 过滤不属于当前数据库表的字段（前端共享 mutation 会发送所有 ID）
+			in = h.filterColumns(d.newModel(), in)
 			h.DB.Table(tableName).Where(quotedID+" = ?", id).Updates(in)
 			return true, nil
 		}

@@ -116,6 +116,7 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		projectID, _ := in["projectId"].(string)
 		delete(in, "projectId")
+		in = h.filterColumns(&schema.Project{}, in)
 
 		var project schema.Project
 		if err := h.DB.First(&project, "\"projectId\" = ?", projectID).Error; err != nil {
@@ -386,6 +387,7 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["environmentId"].(string)
 		delete(in, "environmentId")
+		in = h.filterColumns(&schema.Environment{}, in)
 
 		var env schema.Environment
 		if err := h.DB.First(&env, "\"environmentId\" = ?", id).Error; err != nil {

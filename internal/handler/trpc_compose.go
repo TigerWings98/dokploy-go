@@ -110,6 +110,9 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		composeID, _ := in["composeId"].(string)
 		delete(in, "composeId")
+		// TS 版通过 Zod apiUpdateCompose 过滤无关字段，Go 版需显式过滤
+		// 前端可能发送 mongoId/mysqlId/mariadbId/postgresId/redisId 等不属于 compose 表的字段
+		in = h.filterColumns(&schema.Compose{}, in)
 		var compose schema.Compose
 		if err := h.DB.First(&compose, "\"composeId\" = ?", composeID).Error; err != nil {
 			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}

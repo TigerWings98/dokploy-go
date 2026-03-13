@@ -98,6 +98,7 @@ func (h *Handler) registerPatchTRPC(r procedureRegistry) {
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		in["updatedAt"] = now
+		in = h.filterColumns(&schema.Patch{}, in)
 		h.DB.Model(&schema.Patch{}).Where("\"patchId\" = ?", patchID).Updates(in)
 		var patch schema.Patch
 		h.DB.First(&patch, "\"patchId\" = ?", patchID)

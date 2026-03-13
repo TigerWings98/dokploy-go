@@ -295,6 +295,7 @@ func (h *Handler) registerBackupTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["volumeBackupId"].(string)
 		delete(in, "volumeBackupId")
+		in = h.filterColumns(&schema.VolumeBackup{}, in)
 		h.DB.Model(&schema.VolumeBackup{}).Where("\"volumeBackupId\" = ?", id).Updates(in)
 		return true, nil
 	}

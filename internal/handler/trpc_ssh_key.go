@@ -121,6 +121,7 @@ func (h *Handler) registerSSHKeyTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		id, _ := in["sshKeyId"].(string)
 		delete(in, "sshKeyId")
+		in = h.filterColumns(&schema.SSHKey{}, in)
 
 		var key schema.SSHKey
 		if err := h.DB.First(&key, "\"sshKeyId\" = ?", id).Error; err != nil {

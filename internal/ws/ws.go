@@ -363,12 +363,9 @@ func (h *Handler) ContainerLogs(c echo.Context) error {
 }
 
 func (h *Handler) streamLogsLocal(ctx context.Context, conn *websocket.Conn, args []string, search string) {
-	// Always use shell to merge stderr (docker logs outputs to stderr) via 2>&1
+	// 不依赖外部 grep：docker logs 合并 stderr 后在 Go 中做大小写不敏感过滤
+	// 避免 Alpine/BusyBox grep 不支持 --line-buffered 导致无输出
 	shellCmd := "docker " + strings.Join(args, " ") + " 2>&1"
-	if search != "" {
-		shellCmd += fmt.Sprintf(" | grep --line-buffered -iF '%s'",
-			strings.ReplaceAll(search, "'", "'\\''"))
-	}
 	cmd := exec.CommandContext(ctx, "sh", "-c", shellCmd)
 
 	stdout, err := cmd.StdoutPipe()
@@ -382,14 +379,19 @@ func (h *Handler) streamLogsLocal(ctx context.Context, conn *websocket.Conn, arg
 		return
 	}
 
+	searchLower := strings.ToLower(search)
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			break
 		}
-		line := append(scanner.Bytes(), '\n')
-		if err := conn.WriteMessage(websocket.TextMessage, line); err != nil {
+		line := scanner.Text()
+		// 大小写不敏感固定字符串匹配（等价于 grep -iF）
+		if search != "" && !strings.Contains(strings.ToLower(line), searchLower) {
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(line+"\n")); err != nil {
 			break
 		}
 	}
@@ -437,7 +439,8 @@ func (h *Handler) streamLogsViaSSH(ctx context.Context, conn *websocket.Conn, se
 
 	remoteCmd := "docker " + strings.Join(args, " ")
 	if search != "" {
-		remoteCmd += fmt.Sprintf(" 2>&1 | grep --line-buffered -iF '%s'",
+		// 远程服务器执行 grep 过滤（不用 --line-buffered，BusyBox 不支持）
+		remoteCmd += fmt.Sprintf(" 2>&1 | grep -iF '%s'",
 			strings.ReplaceAll(search, "'", "'\\''"))
 	}
 

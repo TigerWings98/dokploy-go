@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	_ "time/tzdata" // 嵌入时区数据库，确保精简容器中也能解析 Asia/Shanghai 等时区
 
 	"github.com/dokploy/dokploy/internal/auth"
 	"github.com/dokploy/dokploy/internal/backup"

@@ -32,14 +32,12 @@ ENV NODE_ENV=production
 RUN pnpm run build
 
 # ============================================================
-# Stage 3: Final runtime image
+# Stage 3: Final runtime image (Debian slim，与 TS 版对齐)
 # ============================================================
-FROM alpine:3.21
+FROM debian:bookworm-slim
 
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
-RUN apk add --no-cache \
-    docker-cli \
-    docker-cli-compose \
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     git-lfs \
@@ -50,16 +48,26 @@ RUN apk add --no-cache \
     iproute2 \
     zip \
     unzip \
-    rclone
+    ca-certificates \
+    && git lfs install \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Nixpacks (cross-compile safe, manual download)
+# Install Docker CLI (与 TS 版一致，使用官方脚本)
+RUN curl -fsSL https://get.docker.com -o get-docker.sh && \
+    sh get-docker.sh --version 28.5.2 && \
+    rm get-docker.sh
+
+# Install rclone
+RUN curl https://rclone.org/install.sh | bash
+
+# Install Nixpacks
 ARG TARGETARCH
 ARG NIXPACKS_VERSION=v1.41.0
 RUN if [ "$TARGETARCH" = "arm64" ]; then NARCH="aarch64"; else NARCH="x86_64"; fi && \
     curl -sSL "https://github.com/railwayapp/nixpacks/releases/download/${NIXPACKS_VERSION}/nixpacks-${NIXPACKS_VERSION}-${NARCH}-unknown-linux-musl.tar.gz" \
     | tar -xz -C /usr/local/bin
 
-# Install Railpack (cross-compile safe, manual download)
+# Install Railpack
 ARG RAILPACK_VERSION=v0.17.2
 RUN if [ "$TARGETARCH" = "arm64" ]; then RARCH="arm64"; else RARCH="x86_64"; fi && \
     curl -sSL "https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${RARCH}-unknown-linux-musl.tar.gz" \

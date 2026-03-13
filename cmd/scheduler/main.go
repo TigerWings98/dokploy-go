@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	_ "time/tzdata" // 嵌入时区数据库，确保精简容器中也能解析时区
 
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"

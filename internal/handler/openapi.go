@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -32,18 +33,36 @@ func (h *Handler) HandleOpenAPI(c echo.Context) error {
 
 	// 提取输入参数
 	var input json.RawMessage
-	if c.Request().Method == http.MethodGet {
+	if c.Request().Method == http.MethodGet || c.Request().Method == http.MethodDelete {
+		// OpenAPI GET/DELETE: 先检查 ?input={json} 格式，再回退到直接 query 参数映射
+		// TS 版 trpc-openapi 对 GET 请求直接从 query 参数映射到 input 对象
+		// 例如 ?composeId=xxx → {"composeId": "xxx"}
 		inputStr := c.QueryParam("input")
 		if inputStr != "" {
 			decoded, err := url.QueryUnescape(inputStr)
 			if err != nil {
 				decoded = inputStr
 			}
-			// REST 格式的 input 是直接的 JSON（不包裹在 {json: ...} 中）
 			input = json.RawMessage(decoded)
+		} else {
+			// 将所有 query 参数直接映射为 JSON 对象
+			// TS 版 trpc-openapi 会根据 Zod schema 自动强转类型，
+			// Go 版无 schema 信息，使用启发式方法：数字 → number，布尔 → bool，其余保持 string
+			params := c.QueryParams()
+			if len(params) > 0 {
+				obj := make(map[string]interface{}, len(params))
+				for key, values := range params {
+					if len(values) == 1 {
+						obj[key] = coerceQueryValue(values[0])
+					} else {
+						obj[key] = values
+					}
+				}
+				input, _ = json.Marshal(obj)
+			}
 		}
 	} else {
-		// POST: body 就是直接的 JSON input（不是 tRPC 的 {json: ...} 格式）
+		// POST/PUT/PATCH: body 就是直接的 JSON input（不是 tRPC 的 {json: ...} 格式）
 		var body json.RawMessage
 		if err := json.NewDecoder(c.Request().Body).Decode(&body); err == nil && len(body) > 0 {
 			input = body
@@ -168,6 +187,32 @@ func (h *Handler) GenerateOpenAPIDocument() map[string]interface{} {
 			{"apiKey": {}},
 		},
 	}
+}
+
+// coerceQueryValue 对 query 参数值做类型强转，模拟 TS 版 trpc-openapi 的行为。
+// 规则：纯数字 → number（int 或 float），"true"/"false" → bool，其余保持 string。
+// 注意：nanoid 等 ID 字段虽然可能以数字开头，但包含非数字字符，不会被误转。
+func coerceQueryValue(s string) interface{} {
+	// 布尔值
+	if s == "true" {
+		return true
+	}
+	if s == "false" {
+		return false
+	}
+	// 空字符串保持 string
+	if s == "" {
+		return s
+	}
+	// 尝试整数（避免 nanoid 等含字母的 ID 被误转）
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return n
+	}
+	// 尝试浮点数
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	return s
 }
 
 // isQueryAction 判断 procedure action 是否为 query（GET）类型

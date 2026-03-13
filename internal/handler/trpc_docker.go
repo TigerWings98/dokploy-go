@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types"
-	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/process"
@@ -90,6 +89,30 @@ func (h *Handler) execDockerCommand(serverID *string, command string) (string, e
 	return result.Stdout, nil
 }
 
+// parseFullContainerLine 解析 getContainers 的 docker ps 完整输出行
+// 格式: "CONTAINER ID : xxx | Name: xxx | Image: xxx | Ports: xxx | State: xxx | Status: xxx"
+func parseFullContainerLine(line string) containerInfo {
+	parts := strings.Split(line, " | ")
+	info := containerInfo{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "CONTAINER ID : ") {
+			info.ContainerID = strings.TrimSpace(strings.TrimPrefix(part, "CONTAINER ID : "))
+		} else if strings.HasPrefix(part, "Name: ") {
+			info.Name = strings.TrimSpace(strings.TrimPrefix(part, "Name: "))
+		} else if strings.HasPrefix(part, "Image: ") {
+			info.Image = strings.TrimSpace(strings.TrimPrefix(part, "Image: "))
+		} else if strings.HasPrefix(part, "Ports: ") {
+			info.Ports = strings.TrimSpace(strings.TrimPrefix(part, "Ports: "))
+		} else if strings.HasPrefix(part, "State: ") {
+			info.State = strings.TrimSpace(strings.TrimPrefix(part, "State: "))
+		} else if strings.HasPrefix(part, "Status: ") {
+			info.Status = strings.TrimSpace(strings.TrimPrefix(part, "Status: "))
+		}
+	}
+	return info
+}
+
 // parseContainerLine 解析 docker ps 输出行（格式与 TS 版完全一致）
 // 格式: "CONTAINER ID : xxx | Name: xxx | State: xxx | Status: xxx"
 func parseContainerLine(line string) appContainerInfo {
@@ -144,58 +167,65 @@ func parseServiceLine(line string) serviceContainerInfo {
 }
 
 func (h *Handler) registerDockerTRPC(r procedureRegistry) {
-	// getContainers - Docker 管理页面，列出所有容器（使用 SDK，仅本地）
+	// getContainers - Docker 管理页面，列出所有容器（与 TS 版一致，使用 CLI + 支持远程服务器）
+	// TS 版: packages/server/src/services/docker.ts getContainers(serverId?)
 	r["docker.getContainers"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			ServerID *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
 
-		if h.Docker == nil {
-			return []interface{}{}, nil
-		}
-		containers, err := h.Docker.DockerClient().ContainerList(c.Request().Context(), containertypes.ListOptions{All: true})
-		if err != nil {
-			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
+		// 与 TS 版完全一致的 docker ps 命令格式
+		command := "docker ps -a --format 'CONTAINER ID : {{.ID}} | Name: {{.Names}} | Image: {{.Image}} | Ports: {{.Ports}} | State: {{.State}} | Status: {{.Status}}'"
+		stdout, err := h.execDockerCommand(in.ServerID, command)
+		if err != nil || strings.TrimSpace(stdout) == "" {
+			return []containerInfo{}, nil
 		}
 
-		result := make([]containerInfo, 0, len(containers))
-		for _, ct := range containers {
-			name := ""
-			if len(ct.Names) > 0 {
-				name = strings.TrimPrefix(ct.Names[0], "/")
-			}
-			if strings.Contains(name, "dokploy") && !strings.Contains(name, "dokploy-monitoring") {
+		var result []containerInfo
+		for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
 				continue
 			}
-			result = append(result, containerInfo{
-				ContainerID: ct.ID,
-				Name:        name,
-				Image:       ct.Image,
-				Ports:       formatPorts(ct.Ports),
-				State:       ct.State,
-				Status:      ct.Status,
-				ServerID:    in.ServerID,
-			})
+			ci := parseFullContainerLine(line)
+			// 过滤 dokploy 内部容器（但保留 dokploy-monitoring）
+			if strings.Contains(ci.Name, "dokploy") && !strings.Contains(ci.Name, "dokploy-monitoring") {
+				continue
+			}
+			ci.ServerID = in.ServerID
+			result = append(result, ci)
+		}
+		if result == nil {
+			result = []containerInfo{}
 		}
 		return result, nil
 	}
 
-	// getConfig - 获取容器详细配置（用于下载日志文件名等）
+	// getConfig - 获取容器详细配置（与 TS 版一致，使用 docker inspect CLI + 支持远程服务器）
+	// TS 版: packages/server/src/services/docker.ts getConfig(containerId, serverId?)
 	r["docker.getConfig"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			ContainerID string  `json:"containerId"`
 			ServerID    *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
-		if h.Docker == nil {
-			return nil, &trpcErr{"Docker not available", "BAD_REQUEST", 400}
-		}
-		container, err := h.Docker.DockerClient().ContainerInspect(c.Request().Context(), in.ContainerID)
+
+		command := fmt.Sprintf("docker inspect %s --format='{{json .}}'", in.ContainerID)
+		stdout, err := h.execDockerCommand(in.ServerID, command)
 		if err != nil {
 			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
 		}
-		return container, nil
+		stdout = strings.TrimSpace(stdout)
+		if stdout == "" {
+			return nil, &trpcErr{"Container not found", "NOT_FOUND", 404}
+		}
+		// 解析为通用 JSON 对象返回（与 TS 版一致）
+		var config interface{}
+		if err := json.Unmarshal([]byte(stdout), &config); err != nil {
+			return nil, &trpcErr{"Failed to parse container config", "BAD_REQUEST", 400}
+		}
+		return config, nil
 	}
 
 	// getContainersByAppLabel - 按标签过滤容器（与 TS 版一致，使用 CLI）
@@ -333,17 +363,16 @@ func (h *Handler) registerDockerTRPC(r procedureRegistry) {
 		return result, nil
 	}
 
+	// restartContainer - 重启容器（与 TS 版一致，使用 CLI）
+	// TS 版: packages/server/src/services/docker.ts containerRestart(containerId) — 仅本地
 	r["docker.restartContainer"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			ContainerID string  `json:"containerId"`
-			ServerID    *string `json:"serverId"`
+			ContainerID string `json:"containerId"`
 		}
 		json.Unmarshal(input, &in)
-		if h.Docker == nil {
-			return nil, &trpcErr{"Docker not available", "BAD_REQUEST", 400}
-		}
-		timeout := 10
-		if err := h.Docker.DockerClient().ContainerRestart(c.Request().Context(), in.ContainerID, containertypes.StopOptions{Timeout: &timeout}); err != nil {
+		command := fmt.Sprintf("docker container restart %s", in.ContainerID)
+		_, err := h.execDockerCommand(nil, command)
+		if err != nil {
 			return nil, &trpcErr{err.Error(), "BAD_REQUEST", 400}
 		}
 		return true, nil

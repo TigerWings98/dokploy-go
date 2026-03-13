@@ -47,6 +47,7 @@ const (
 	TaskStopApplication    = "stop:application"
 	TaskStartApplication   = "start:application"
 	TaskStopCompose        = "stop:compose"
+	TaskStopDatabase       = "stop:database"
 	TaskBackupRun         = "backup:run"
 	TaskDockerCleanup     = "docker:cleanup"
 )
@@ -225,7 +226,7 @@ func (q *Queue) EnqueueStopDatabase(databaseID, dbType string) (*asynq.TaskInfo,
 		DatabaseID: databaseID,
 		Type:       dbType,
 	})
-	task := asynq.NewTask("stop:database", payload)
+	task := asynq.NewTask(TaskStopDatabase, payload)
 	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
 }
 
@@ -308,6 +309,7 @@ type TaskHandlers struct {
 	HandleRebuildDatabase    func(ctx context.Context, payload DeployDatabasePayload) error
 	HandleStopCompose       func(ctx context.Context, payload SimpleIDPayload) error
 	HandleStopApplication   func(ctx context.Context, payload SimpleIDPayload) error
+	HandleStopDatabase      func(ctx context.Context, payload DeployDatabasePayload) error
 	HandleStartApplication  func(ctx context.Context, payload SimpleIDPayload) error
 	HandleBackupRun         func(ctx context.Context, payload SimpleIDPayload) error
 	HandleDockerCleanup     func(ctx context.Context) error
@@ -338,6 +340,7 @@ func NewWorker(redisAddr string, concurrency int, handlers TaskHandlers) *Worker
 	mux.HandleFunc(TaskRebuildDatabase, makeHandler(handlers.HandleRebuildDatabase))
 	mux.HandleFunc(TaskStopCompose, makeHandler(handlers.HandleStopCompose))
 	mux.HandleFunc(TaskStopApplication, makeHandler(handlers.HandleStopApplication))
+	mux.HandleFunc(TaskStopDatabase, makeHandler(handlers.HandleStopDatabase))
 	mux.HandleFunc(TaskStartApplication, makeHandler(handlers.HandleStartApplication))
 	mux.HandleFunc(TaskBackupRun, makeHandler(handlers.HandleBackupRun))
 	mux.HandleFunc(TaskDockerCleanup, func(ctx context.Context, t *asynq.Task) error {

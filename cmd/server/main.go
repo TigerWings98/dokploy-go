@@ -133,6 +133,10 @@ func main() {
 				log.Printf("Stop application: %s", payload.ID)
 				return appSvc.Stop(payload.ID)
 			},
+			HandleStopDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
+				log.Printf("Stop database: %s (%s)", payload.DatabaseID, payload.Type)
+				return dbSvc.StopDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
+			},
 			HandleStartApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 				log.Printf("Start application: %s", payload.ID)
 				return appSvc.Start(payload.ID)

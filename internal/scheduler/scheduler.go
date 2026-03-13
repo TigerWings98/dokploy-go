@@ -88,13 +88,13 @@ func (s *Scheduler) addJob(schedule schema.Schedule) error {
 	}
 
 	if !schedule.Enabled {
+		log.Printf("[Scheduler] Schedule %s (%s) is disabled, skipping", schedule.Name, schedule.ScheduleID)
 		return nil
 	}
 
 	// 构建 cron 表达式：如果 schedule 指定了时区，使用 CRON_TZ= 前缀
 	// 与 TS 版 node-schedule 的 tz 参数行为一致
-	// 例如 timezone="Asia/Shanghai", cronExpr="0 3 * * *"
-	// → "CRON_TZ=Asia/Shanghai 0 3 * * *"，在上海时间 03:00 执行
+	// TS 版默认使用 UTC：tz = timezone || "UTC"
 	cronExpr := schedule.CronExpression
 	if schedule.Timezone != nil && *schedule.Timezone != "" {
 		cronExpr = fmt.Sprintf("CRON_TZ=%s %s", *schedule.Timezone, schedule.CronExpression)
@@ -105,10 +105,12 @@ func (s *Scheduler) addJob(schedule schema.Schedule) error {
 		s.executeSchedule(sched)
 	})
 	if err != nil {
+		log.Printf("[Scheduler] Failed to add schedule %s (%s) with cron %q: %v", schedule.Name, schedule.ScheduleID, cronExpr, err)
 		return fmt.Errorf("invalid cron expression %q: %w", cronExpr, err)
 	}
 
 	s.jobs[schedule.ScheduleID] = entryID
+	log.Printf("[Scheduler] Added schedule %s (%s) with cron %q, entryID=%d", schedule.Name, schedule.ScheduleID, cronExpr, entryID)
 	return nil
 }
 
@@ -130,10 +132,13 @@ func (s *Scheduler) RemoveJob(scheduleID string) {
 // - title/description 使用 "Schedule"（与 TS 版一致）
 func (s *Scheduler) executeSchedule(schedule schema.Schedule) {
 	// 重新从数据库读取最新的 schedule（可能已更新命令/配置）
+	// 需要 Preload Application/Compose 及其 Server，用于判断是否远程执行
 	var freshSchedule schema.Schedule
 	if err := s.db.
 		Preload("Application").
+		Preload("Application.Server").Preload("Application.Server.SSHKey").
 		Preload("Compose").
+		Preload("Compose.Server").Preload("Compose.Server.SSHKey").
 		Preload("Server").Preload("Server.SSHKey").
 		First(&freshSchedule, "\"scheduleId\" = ?", schedule.ScheduleID).Error; err != nil {
 		log.Printf("Schedule %s not found, skipping execution", schedule.ScheduleID)
@@ -220,54 +225,106 @@ func (s *Scheduler) executeSchedule(schedule schema.Schedule) {
 }
 
 // executeContainerCommand 在应用/compose 容器内执行命令（docker exec）
+// 与 TS 版 runCommand 中 application/compose 分支一致：
+// - Application：通过 Docker Swarm label 查找容器（com.docker.swarm.service.name）
+// - Compose：通过 Docker Compose label 查找容器（com.docker.compose.project + service）
+// - 远程：通过 Application/Compose 的 Server SSH 执行
 func (s *Scheduler) executeContainerCommand(schedule schema.Schedule, writeLog func(string), deployment *schema.Deployment) error {
 	var appName string
-	var serverID *string
+	var server *schema.Server
+	var serviceName string
 
 	if schedule.ScheduleType == "application" && schedule.Application != nil {
 		appName = schedule.Application.AppName
-		serverID = schedule.Application.ServerID
+		// 远程服务器信息从 Application 获取（与 TS 版一致：application.serverId）
+		if schedule.Application.ServerID != nil && schedule.Application.Server != nil && schedule.Application.Server.SSHKey != nil {
+			server = schedule.Application.Server
+		}
 	} else if schedule.ScheduleType == "compose" && schedule.Compose != nil {
 		appName = schedule.Compose.AppName
-		serverID = schedule.Compose.ServerID
+		// 远程服务器信息从 Compose 获取（与 TS 版一致：compose.serverId）
+		if schedule.Compose.ServerID != nil && schedule.Compose.Server != nil && schedule.Compose.Server.SSHKey != nil {
+			server = schedule.Compose.Server
+		}
+		// compose 类型需要 serviceName 来定位具体容器（与 TS 版 getComposeContainer 一致）
+		if schedule.ServiceName != nil {
+			serviceName = *schedule.ServiceName
+		}
 	}
 
 	if appName == "" {
 		return fmt.Errorf("no application or compose found for schedule")
 	}
 
-	// 获取容器 ID（与 TS 版 getServiceContainer 一致）
-	getContainerCmd := fmt.Sprintf("docker ps -q -f name=%s | head -1", appName)
+	// 构建容器查找命令（与 TS 版 getServiceContainer / getComposeContainer 一致）
+	var getContainerCmd string
+	if schedule.ScheduleType == "compose" && serviceName != "" {
+		// Compose：使用 Docker Compose label 过滤（与 TS 版 getComposeContainer 一致）
+		if schedule.Compose != nil && schedule.Compose.ComposeType == "stack" {
+			// Stack：使用 swarm label
+			getContainerCmd = fmt.Sprintf(
+				`docker ps -q --filter "label=com.docker.stack.namespace=%s" --filter "label=com.docker.swarm.service.name=%s_%s" --filter "status=running" | head -1`,
+				appName, appName, serviceName,
+			)
+		} else {
+			// Docker Compose：使用 compose label
+			getContainerCmd = fmt.Sprintf(
+				`docker ps -q --filter "label=com.docker.compose.project=%s" --filter "label=com.docker.compose.service=%s" --filter "status=running" | head -1`,
+				appName, serviceName,
+			)
+		}
+	} else {
+		// Application：使用 Swarm service label（与 TS 版 getServiceContainer 一致）
+		getContainerCmd = fmt.Sprintf(
+			`docker ps -q --filter "label=com.docker.swarm.service.name=%s" --filter "status=running" | head -1`,
+			appName,
+		)
+	}
 
-	if serverID != nil && schedule.Server != nil && schedule.Server.SSHKey != nil {
+	if server != nil {
+		// 远程执行（与 TS 版一致：通过 Application/Compose 的 Server 执行）
 		conn := process.SSHConnection{
-			Host:       schedule.Server.IPAddress,
-			Port:       schedule.Server.Port,
-			Username:   schedule.Server.Username,
-			PrivateKey: schedule.Server.SSHKey.PrivateKey,
+			Host:       server.IPAddress,
+			Port:       server.Port,
+			Username:   server.Username,
+			PrivateKey: server.SSHKey.PrivateKey,
 		}
 		result, err := process.ExecAsyncRemote(conn, getContainerCmd, nil)
-		if err != nil || result == nil || result.Stdout == "" {
-			return fmt.Errorf("failed to get container ID: %v", err)
+		if err != nil || result == nil || strings.TrimSpace(result.Stdout) == "" {
+			return fmt.Errorf("failed to get container ID for %s on remote: %v", appName, err)
 		}
 		containerID := strings.TrimSpace(result.Stdout)
 
-		execCmd := fmt.Sprintf("docker exec %s %s -c '%s'", containerID, schedule.ShellType, schedule.Command)
-		writeLog(fmt.Sprintf("Running command: %s", execCmd))
+		// 与 TS 版一致：在远程 docker exec，输出重定向到日志文件
+		execCmd := fmt.Sprintf(`set -e
+echo "Running command: docker exec %s %s -c '%s'" >> %s;
+docker exec %s %s -c '%s' >> %s 2>> %s || {
+	echo "❌ Command failed" >> %s;
+	exit 1;
+}
+echo "✅ Command executed successfully" >> %s;`,
+			containerID, schedule.ShellType, schedule.Command, deployment.LogPath,
+			containerID, schedule.ShellType, schedule.Command, deployment.LogPath, deployment.LogPath,
+			deployment.LogPath,
+			deployment.LogPath,
+		)
 		_, err = process.ExecAsyncRemote(conn, execCmd, writeLog)
 		return err
 	}
 
-	// 本地执行
+	// 本地执行（与 TS 版一致：spawnAsync docker exec）
 	result, err := process.ExecAsync(getContainerCmd)
-	if err != nil || result == nil || result.Stdout == "" {
-		return fmt.Errorf("failed to get container ID for %s", appName)
+	if err != nil || result == nil || strings.TrimSpace(result.Stdout) == "" {
+		return fmt.Errorf("failed to get container ID for %s: %v", appName, err)
 	}
 	containerID := strings.TrimSpace(result.Stdout)
 
-	execCmd := fmt.Sprintf("docker exec %s %s -c '%s'", containerID, schedule.ShellType, schedule.Command)
-	writeLog(fmt.Sprintf("Running command: %s", execCmd))
-	_, err = process.ExecAsyncStream(execCmd, writeLog, process.WithTimeout(30*time.Minute))
+	writeLog(fmt.Sprintf("docker exec %s %s -c %s", containerID, schedule.ShellType, schedule.Command))
+	_, err = process.ExecAsyncStream(
+		fmt.Sprintf("docker exec %s %s -c '%s'", containerID, schedule.ShellType, schedule.Command),
+		writeLog,
+		process.WithTimeout(30*time.Minute),
+	)
 	return err
 }
 
@@ -289,11 +346,15 @@ func (s *Scheduler) executeDokployServerCommand(schedule schema.Schedule, writeL
 }
 
 // executeRemoteServerCommand 在远程服务器执行 script.sh（与 TS 版一致）
+// TS 版流程：
+// 1. 在远程服务器的 /etc/dokploy/schedules/{appName}/script.sh 执行
+// 2. 输出通过 tee 同时写入远程日志文件和流式返回
 func (s *Scheduler) executeRemoteServerCommand(schedule schema.Schedule, writeLog func(string), deployment *schema.Deployment) error {
 	if schedule.Server == nil || schedule.Server.SSHKey == nil {
 		return fmt.Errorf("server or SSH key not found for schedule")
 	}
 
+	// 与 TS 版 paths(true) 一致：远程服务器上也使用 /etc/dokploy
 	schedulesPath := filepath.Join(s.cfg.Paths.BasePath, "schedules")
 	fullPath := filepath.Join(schedulesPath, schedule.AppName)
 
@@ -304,8 +365,21 @@ func (s *Scheduler) executeRemoteServerCommand(schedule schema.Schedule, writeLo
 		PrivateKey: schedule.Server.SSHKey.PrivateKey,
 	}
 
-	cmd := fmt.Sprintf("bash -c %s/script.sh", fullPath)
-	writeLog(fmt.Sprintf("Running remote script: %s", cmd))
+	// 与 TS 版一致：先在远程创建日志目录和初始化日志文件
+	initCmd := fmt.Sprintf(`mkdir -p %s; echo "Initializing schedule" >> %s;`,
+		filepath.Join(schedulesPath, schedule.AppName), deployment.LogPath)
+	process.ExecAsyncRemote(conn, initCmd, nil)
+
+	// 与 TS 版一致：使用 bash -c 执行 script.sh，输出 tee 到日志文件
+	cmd := fmt.Sprintf(`set -e
+echo "Running script" >> %s;
+bash -c %s/script.sh 2>&1 | tee -a %s || {
+	echo "❌ Command failed" >> %s;
+	exit 1;
+}
+echo "✅ Command executed successfully" >> %s;`,
+		deployment.LogPath, fullPath, deployment.LogPath, deployment.LogPath, deployment.LogPath)
+	writeLog(fmt.Sprintf("Running remote script: %s/script.sh", fullPath))
 	_, err := process.ExecAsyncRemote(conn, cmd, func(data string) {
 		writeLog(data)
 		if pid := extractPID(data); pid != "" {

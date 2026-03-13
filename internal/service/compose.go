@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	composepkg "github.com/dokploy/dokploy/internal/compose"
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -47,6 +48,8 @@ func (s *ComposeService) FindByID(composeID string) (*schema.Compose, error) {
 		Preload("Mounts").
 		Preload("Server").
 		Preload("Server.SSHKey").
+		Preload("Environment").
+		Preload("Environment.Project").
 		First(&compose, "\"composeId\" = ?", composeID).Error
 	if err != nil {
 		return nil, err
@@ -138,7 +141,9 @@ func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.
 	isRemote := compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil
 
 	if isRemote {
-		// 远程 rebuild：与 TS 版一致，raw 类型仍然写入最新文件，然后 compose up
+		// 远程 rebuild：与 TS 版一致
+		// Raw 类型：重新写入最新 compose 文件；Git 类型：使用已有代码
+		// 然后通过 buildAndRunRemoteCompose 统一处理转换 + env + docker up
 		conn := process.SSHConnection{
 			Host:       compose.Server.IPAddress,
 			Port:       compose.Server.Port,
@@ -148,7 +153,7 @@ func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.
 
 		projectPath := fmt.Sprintf("/etc/dokploy/compose/%s/code", compose.AppName)
 
-		// Raw 类型：重新写入 compose file
+		// Raw 类型：重新写入 compose file（未转换的原始内容，转换在 buildAndRunRemoteCompose 统一处理）
 		if compose.SourceType == schema.SourceTypeComposeRaw {
 			encoded := base64Encode(compose.ComposeFile)
 			writeCmd := fmt.Sprintf(`mkdir -p %s && echo "%s" | base64 -d > "%s/docker-compose.yml"`, projectPath, encoded, projectPath)
@@ -159,28 +164,14 @@ func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.
 			}
 		}
 
-		// Compose up
-		composePth := "docker-compose.yml"
-		if compose.ComposePath != "" {
-			composePth = compose.ComposePath
-		}
-		var dockerCmd string
-		switch compose.ComposeType {
-		case schema.ComposeTypeStack:
-			dockerCmd = fmt.Sprintf("stack deploy -c %s %s --prune --with-registry-auth", composePth, compose.AppName)
-		default:
-			dockerCmd = fmt.Sprintf("compose -p %s -f %s up -d --build --remove-orphans", compose.AppName, composePth)
-		}
-
-		buildCmd := fmt.Sprintf(`set -e; cd "%s" && docker %s 2>&1`, projectPath, dockerCmd)
-		_, err := process.ExecAsyncRemote(conn, buildCmd, writeLog)
-		if err != nil {
+		// 与 TS 版 getBuildComposeCommand 一致：读取 → 转换 → 写回 + env + docker up
+		if err := s.buildAndRunRemoteCompose(conn, compose, deployment, projectPath, writeLog); err != nil {
 			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
 			return
 		}
 	} else {
-		// 本地 rebuild
-		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
+		// 本地 rebuild：与 TS 版一致，源码在 ComposePath/appName/code/ 下
+		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName, "code")
 		os.MkdirAll(composeDir, 0755)
 
 		if compose.SourceType == schema.SourceTypeComposeRaw {
@@ -235,13 +226,19 @@ func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.D
 			return
 		}
 	} else {
-		// 本地部署
-		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName)
+		// 本地部署：与 TS 版一致，源码放在 ComposePath/appName/code/ 下
+		composeDir := filepath.Join(s.cfg.Paths.ComposePath, compose.AppName, "code")
 		os.MkdirAll(composeDir, 0755)
 
 		if err := s.prepareComposeSource(compose, composeDir, writeLog); err != nil {
 			s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
 			return
+		}
+
+		// 应用补丁（与 TS 版 generateApplyPatchesCommand 一致）
+		// 仅 Git 源码类型需要补丁，Raw 类型每次都重新写入完整文件
+		if compose.SourceType != schema.SourceTypeComposeRaw {
+			s.applyPatches(compose.ComposeID, composeDir, writeLog)
 		}
 
 		if err := s.composeUpLocal(compose, composeDir, writeLog); err != nil {
@@ -265,7 +262,8 @@ func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.D
 	s.sendComposeSuccessNotification(compose)
 }
 
-// runDeployRemote 远程部署：与 TS 版完全一致，将准备源码和 compose up 作为 SSH 命令发送
+// runDeployRemote 远程部署：与 TS 版完全一致
+// TS 版流程：1. 克隆/写入源码 → 2. 应用补丁 → 3. 读取 compose 文件 → 4. 转换（suffix/network） → 5. 写回 + env + docker up
 func (s *ComposeService) runDeployRemote(compose *schema.Compose, deployment *schema.Deployment, writeLog func(string)) error {
 	conn := process.SSHConnection{
 		Host:       compose.Server.IPAddress,
@@ -281,7 +279,7 @@ func (s *ComposeService) runDeployRemote(compose *schema.Compose, deployment *sc
 	var prepareCmd string
 	switch compose.SourceType {
 	case schema.SourceTypeComposeRaw:
-		// 与 TS 版 getCreateComposeFileCommand 一致：base64 编码写入文件
+		// Raw 类型：直接写入 compose 文件（网络注入在后续统一处理）
 		encoded := base64Encode(compose.ComposeFile)
 		prepareCmd = fmt.Sprintf(`set -e;
 rm -rf %s;
@@ -329,18 +327,84 @@ echo "Repository cloned: ✅";`, projectPath, filepath.Dir(projectPath), branch,
 		return fmt.Errorf("failed to prepare source on remote: %w", err)
 	}
 
-	// Step 2: 构建 env 文件 + compose up（与 TS 版 getBuildComposeCommand 一致）
-	var dockerCmd string
-	composePth := "docker-compose.yml"
-	if compose.ComposePath != "" {
-		composePth = compose.ComposePath
+	// Step 2: 应用补丁（与 TS 版 generateApplyPatchesCommand 一致，仅 Git 源码类型需要）
+	if compose.SourceType != schema.SourceTypeComposeRaw {
+		patchCmd := s.generateRemotePatchCommand(compose.ComposeID, projectPath)
+		if patchCmd != "" {
+			writeLog("--- Applying patches on remote server ---")
+			patchWithLog := fmt.Sprintf("(%s) >> %s 2>&1", patchCmd, deployment.LogPath)
+			_, err = process.ExecAsyncRemote(conn, patchWithLog, writeLog)
+			if err != nil {
+				return fmt.Errorf("failed to apply patches on remote: %w", err)
+			}
+		}
 	}
 
-	switch compose.ComposeType {
-	case schema.ComposeTypeStack:
-		dockerCmd = fmt.Sprintf("stack deploy -c %s %s --prune --with-registry-auth", composePth, compose.AppName)
-	default:
-		dockerCmd = fmt.Sprintf("compose -p %s -f %s up -d --build --remove-orphans", compose.AppName, composePth)
+	// Step 3: 构建 compose up 命令（与 TS 版 getBuildComposeCommand 一致）
+	// 读取远程 compose 文件 → 本地转换（suffix/network） → 生成写回命令
+	return s.buildAndRunRemoteCompose(conn, compose, deployment, projectPath, writeLog)
+}
+
+// buildAndRunRemoteCompose 构建并执行远程 compose 部署命令
+// 与 TS 版 getBuildComposeCommand + writeDomainsToCompose 一致：
+// 1. 从远程读取 compose 文件（cat via SSH）
+// 2. 在本地进行 suffix/network 转换
+// 3. 生成完整 bash 命令：写回转换后的 compose + 创建 .env + docker up
+func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, compose *schema.Compose, deployment *schema.Deployment, projectPath string, writeLog func(string)) error {
+	composePth := "docker-compose.yml"
+	if compose.ComposePath != "" && compose.SourceType != schema.SourceTypeComposeRaw {
+		composePth = compose.ComposePath
+	}
+	remoteComposeFile := filepath.Join(projectPath, composePth)
+
+	// 与 TS 版 loadDockerComposeRemote 一致：通过 SSH 读取远程 compose 文件
+	catResult, err := process.ExecAsyncRemote(conn, fmt.Sprintf("cat %s", remoteComposeFile), nil)
+	if err != nil {
+		return fmt.Errorf("failed to read compose file from remote: %w", err)
+	}
+	composeContent := []byte(catResult.Stdout)
+
+	// 与 TS 版 addDomainToCompose 中的转换逻辑一致：
+	// 1. isolated → randomizeDeployableSpecificationFile (collision prevention + volume isolation)
+	// 2. randomize → randomizeSpecificationFile (suffix to all properties)
+	// 3. 网络注入（dokploy-network 或 isolated network）
+	if compose.IsolatedDeployment {
+		suffix := compose.AppName
+		if compose.ComposeSuffix != nil && *compose.ComposeSuffix != "" {
+			suffix = *compose.ComposeSuffix
+		}
+		// InjectIsolatedNetwork 包含了 appName 网络注入 + 可选的 volume suffix
+		if transformed, err := composepkg.InjectIsolatedNetwork(composeContent, suffix, compose.IsolatedDeploymentsVolume); err == nil {
+			composeContent = transformed
+		}
+	} else {
+		// 非隔离：先 randomize suffix，再注入 dokploy-network
+		if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil {
+			if transformed, err := composepkg.AddSuffixToAll(composeContent, *compose.ComposeSuffix); err == nil {
+				composeContent = transformed
+			}
+		}
+		if transformed, err := composepkg.InjectDokployNetwork(composeContent); err == nil {
+			composeContent = transformed
+		}
+	}
+
+	// 与 TS 版 writeDomainsToCompose 一致：将转换后的 compose 内容编码为 base64 写回命令
+	encodedCompose := base64Encode(string(composeContent))
+	writeComposeCmd := fmt.Sprintf(`echo "%s" | base64 -d > "%s";`, encodedCompose, remoteComposeFile)
+
+	// 生成 docker 命令（与 TS 版 createCommand 一致）
+	var dockerCmd string
+	if compose.Command != nil && *compose.Command != "" {
+		dockerCmd = *compose.Command
+	} else {
+		switch compose.ComposeType {
+		case schema.ComposeTypeStack:
+			exportCmd := s.getExportEnvCommand(compose)
+			dockerCmd = fmt.Sprintf("%sstack deploy -c %s %s --prune --with-registry-auth", exportCmd, composePth, compose.AppName)
+		default:
+			dockerCmd = fmt.Sprintf("compose -p %s -f %s up -d --build --remove-orphans", compose.AppName, composePth)
+		}
 	}
 
 	// 构建 .env 文件命令（与 TS 版 getCreateEnvFileCommand 一致）
@@ -351,9 +415,20 @@ echo "Repository cloned: ✅";`, projectPath, filepath.Dir(projectPath), branch,
 	if !strings.Contains(envContent, "DOCKER_CONFIG") {
 		envContent += "DOCKER_CONFIG=/root/.docker\n"
 	}
-	encodedEnv := base64Encode(envContent)
+	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil {
+		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", *compose.ComposeSuffix)
+	}
+	var projectEnv, environmentEnv string
+	if compose.Environment != nil {
+		environmentEnv = compose.Environment.Env
+		if compose.Environment.Project != nil {
+			projectEnv = compose.Environment.Project.Env
+		}
+	}
+	resolvedLines := prepareEnvironmentVariables(envContent, projectEnv, environmentEnv)
+	encodedEnv := base64Encode(strings.Join(resolvedLines, "\n") + "\n")
 
-	envFilePath := filepath.Join(filepath.Dir(filepath.Join(projectPath, composePth)), ".env")
+	envFilePath := filepath.Join(filepath.Dir(remoteComposeFile), ".env")
 
 	// 隔离部署：创建独立网络（stack 使用 overlay 驱动），部署后连接 Traefik
 	var networkCmd, networkConnectCmd string
@@ -369,13 +444,14 @@ echo "Repository cloned: ✅";`, projectPath, filepath.Dir(projectPath), branch,
 	}
 
 	buildCmd := fmt.Sprintf(`set -e;
+%s
 touch %s;
 echo "%s" | base64 -d > "%s";
 cd "%s";
 %s
-docker %s 2>&1 || { echo "Error: ❌ Docker command failed"; exit 1; }
+env -i PATH="$PATH" docker %s 2>&1 || { echo "Error: ❌ Docker command failed"; exit 1; }
 %s
-echo "Docker Compose Deployed: ✅";`, envFilePath, encodedEnv, envFilePath, projectPath, networkCmd, dockerCmd, networkConnectCmd)
+echo "Docker Compose Deployed: ✅";`, writeComposeCmd, envFilePath, encodedEnv, envFilePath, projectPath, networkCmd, dockerCmd, networkConnectCmd)
 
 	writeLog("--- Running compose up on remote server ---")
 	buildWithLog := fmt.Sprintf("(%s) >> %s 2>&1", buildCmd, deployment.LogPath)
@@ -432,6 +508,26 @@ func (s *ComposeService) cloneComposeRepo(compose *schema.Compose, composeDir st
 }
 
 func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir string, writeLog func(string)) error {
+	// 确定 compose 文件路径
+	composePth := compose.ComposePath
+	if composePth == "" || compose.SourceType == schema.SourceTypeComposeRaw {
+		composePth = "docker-compose.yml"
+	}
+
+	// 创建 .env 文件（与 TS 版 getCreateEnvFileCommand 一致）
+	s.createEnvFile(compose, composeDir, writeLog)
+
+	// 应用 randomize 后缀转换（与 TS 版 randomizeSpecificationFile 一致）
+	// 非隔离模式下，randomize=true 时给 services/volumes/networks/configs/secrets 加后缀
+	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil && !compose.IsolatedDeployment {
+		s.applySuffixToComposeFile(compose, composeDir, composePth, *compose.ComposeSuffix, writeLog)
+	}
+
+	// 注入网络到 compose 文件（与 TS 版 addDomainToCompose 一致）
+	// 非隔离部署：加入共享 dokploy-network（external: true）
+	// 隔离部署：加入以 appName 命名的独立网络
+	s.injectNetworkToComposeFile(compose, composeDir, writeLog)
+
 	// 隔离部署：创建独立网络（stack 使用 overlay 驱动）
 	if compose.IsolatedDeployment {
 		driverFlag := ""
@@ -443,20 +539,31 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 		process.ExecAsyncStream(networkCmd, writeLog)
 	}
 
+	// 生成 docker 命令（与 TS 版 createCommand 一致）
 	var cmd string
-
-	switch compose.ComposeType {
-	case schema.ComposeTypeStack:
-		stackName := compose.AppName
-		if compose.ComposeSuffix != nil {
-			stackName = *compose.ComposeSuffix
+	if compose.Command != nil && *compose.Command != "" {
+		// 用户自定义命令
+		cmd = fmt.Sprintf("docker %s", *compose.Command)
+	} else {
+		switch compose.ComposeType {
+		case schema.ComposeTypeStack:
+			stackName := compose.AppName
+			if compose.ComposeSuffix != nil {
+				stackName = *compose.ComposeSuffix
+			}
+			// Stack deploy：需要 export 环境变量（与 TS 版 getExportEnvCommand 一致）
+			exportCmd := s.getExportEnvCommand(compose)
+			cmd = fmt.Sprintf("%sdocker stack deploy -c %s %s --prune --with-registry-auth", exportCmd, composePth, stackName)
+		default:
+			cmd = fmt.Sprintf("docker compose -p %s -f %s up -d --build --remove-orphans", compose.AppName, composePth)
 		}
-		cmd = fmt.Sprintf("docker stack deploy -c docker-compose.yml %s --prune", stackName)
-	default:
-		cmd = fmt.Sprintf("docker compose -p %s up -d --build --remove-orphans", compose.AppName)
 	}
 
-	_, err := process.ExecAsyncStream(cmd, writeLog, process.WithDir(composeDir))
+	// 使用 env -i PATH="$PATH" 隔离环境变量（与 TS 版一致）
+	// 确保 docker compose 只使用 .env 文件中的变量，不受宿主环境污染
+	shellCmd := fmt.Sprintf(`env -i PATH="$PATH" %s`, cmd)
+
+	_, err := process.ExecAsyncStream(shellCmd, writeLog, process.WithDir(composeDir))
 	if err != nil {
 		return err
 	}
@@ -469,6 +576,221 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 	}
 
 	return nil
+}
+
+// applySuffixToComposeFile 对 compose 文件应用 randomize 后缀
+// 与 TS 版 randomizeSpecificationFile → addSuffixToAll 一致
+func (s *ComposeService) applySuffixToComposeFile(compose *schema.Compose, composeDir, composePth, suffix string, writeLog func(string)) {
+	composeFilePath := filepath.Join(composeDir, composePth)
+	data, err := os.ReadFile(composeFilePath)
+	if err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to read compose file for suffix: %v", err))
+		}
+		return
+	}
+
+	result, err := composepkg.AddSuffixToAll(data, suffix)
+	if err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to apply suffix to compose file: %v", err))
+		}
+		return
+	}
+
+	if err := os.WriteFile(composeFilePath, result, 0644); err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to write suffixed compose file: %v", err))
+		}
+		return
+	}
+	if writeLog != nil {
+		writeLog(fmt.Sprintf("Applied suffix '%s' to compose file ✅", suffix))
+	}
+}
+
+// getExportEnvCommand 为 Docker Stack deploy 生成环境变量 export 前缀
+// 与 TS 版 getExportEnvCommand 一致：Stack 不支持 .env 文件，需要通过 shell export 传递
+func (s *ComposeService) getExportEnvCommand(compose *schema.Compose) string {
+	if compose.ComposeType != schema.ComposeTypeStack {
+		return ""
+	}
+
+	envContent := ""
+	if compose.Env != nil && *compose.Env != "" {
+		envContent = *compose.Env
+	}
+
+	var projectEnv, environmentEnv string
+	if compose.Environment != nil {
+		environmentEnv = compose.Environment.Env
+		if compose.Environment.Project != nil {
+			projectEnv = compose.Environment.Project.Env
+		}
+	}
+
+	resolved := prepareEnvironmentVariables(envContent, projectEnv, environmentEnv)
+	if len(resolved) == 0 {
+		return ""
+	}
+
+	// 构建 KEY=VALUE 格式的 export 前缀
+	return strings.Join(resolved, " ") + " "
+}
+
+// applyPatches 应用数据库中的补丁到 compose 项目目录
+// 与 TS 版 generateApplyPatchesCommand 一致：
+// - create/update 类型：写入文件内容
+// - delete 类型：删除文件
+func (s *ComposeService) applyPatches(composeID, composeDir string, writeLog func(string)) {
+	var patches []schema.Patch
+	s.db.Where("\"composeId\" = ? AND enabled = true", composeID).Find(&patches)
+	if len(patches) == 0 {
+		return
+	}
+
+	writeLog(fmt.Sprintf("Applying %d patch(es)...", len(patches)))
+	for _, p := range patches {
+		filePath := filepath.Join(composeDir, p.FilePath)
+		if p.Type == schema.PatchTypeDelete {
+			os.Remove(filePath)
+			writeLog(fmt.Sprintf("  Deleted: %s", p.FilePath))
+		} else {
+			// create 或 update：确保目录存在，写入内容
+			os.MkdirAll(filepath.Dir(filePath), 0755)
+			if err := os.WriteFile(filePath, []byte(p.Content), 0644); err != nil {
+				writeLog(fmt.Sprintf("  Warning: failed to apply patch %s: %v", p.FilePath, err))
+			} else {
+				writeLog(fmt.Sprintf("  Applied: %s", p.FilePath))
+			}
+		}
+	}
+}
+
+// generateRemotePatchCommand 生成远程补丁 shell 命令
+// 与 TS 版 generateApplyPatchesCommand 完全一致：
+// - create/update：base64 编码写入文件
+// - delete：rm -f 删除文件
+func (s *ComposeService) generateRemotePatchCommand(composeID, codePath string) string {
+	var patches []schema.Patch
+	s.db.Where("\"composeId\" = ? AND enabled = true", composeID).Find(&patches)
+	if len(patches) == 0 {
+		return ""
+	}
+
+	cmd := fmt.Sprintf(`set -e; echo "Applying %d patch(es)...";`, len(patches))
+	for _, p := range patches {
+		filePath := filepath.Join(codePath, p.FilePath)
+		if p.Type == schema.PatchTypeDelete {
+			cmd += fmt.Sprintf(`rm -f "%s";`, filePath)
+		} else {
+			encoded := base64Encode(p.Content)
+			cmd += fmt.Sprintf(`
+file="%s"
+dir="$(dirname "$file")"
+mkdir -p "$dir"
+echo "%s" | base64 -d > "$file"
+`, filePath, encoded)
+		}
+	}
+	return cmd
+}
+
+// injectNetworkToComposeFile 注入网络配置到 compose 文件
+// 与 TS 版 addDomainToCompose 中的网络注入逻辑一致：
+// - 非隔离部署：注入 dokploy-network（external: true），使容器加入 Dokploy 共享网络
+// - 隔离部署：注入以 appName 命名的独立网络（external: true）
+func (s *ComposeService) injectNetworkToComposeFile(comp *schema.Compose, composeDir string, writeLog func(string)) {
+	composePth := comp.ComposePath
+	if composePth == "" {
+		composePth = "docker-compose.yml"
+	}
+	composeFilePath := filepath.Join(composeDir, composePth)
+
+	data, err := os.ReadFile(composeFilePath)
+	if err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to read compose file for network injection: %v", err))
+		}
+		return
+	}
+
+	var result []byte
+	if comp.IsolatedDeployment {
+		result, err = composepkg.InjectIsolatedNetwork(data, comp.AppName, comp.IsolatedDeploymentsVolume)
+	} else {
+		result, err = composepkg.InjectDokployNetwork(data)
+	}
+	if err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to inject network into compose file: %v", err))
+		}
+		return
+	}
+
+	if err := os.WriteFile(composeFilePath, result, 0644); err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to write network-injected compose file: %v", err))
+		}
+		return
+	}
+	if writeLog != nil {
+		if comp.IsolatedDeployment {
+			writeLog(fmt.Sprintf("Injected isolated network '%s' into compose file ✅", comp.AppName))
+		} else {
+			writeLog("Injected dokploy-network (external) into compose file ✅")
+		}
+	}
+}
+
+// createEnvFile 在 compose 项目目录创建 .env 文件
+// 与 TS 版 getCreateEnvFileCommand 完全一致：
+// 1. APP_NAME={appName}
+// 2. 用户定义的环境变量（compose.Env）
+// 3. DOCKER_CONFIG=/root/.docker（如果用户未设置）
+// 4. COMPOSE_PREFIX={suffix}（如果 randomize 为 true）
+// 5. 通过 prepareEnvironmentVariables 解析模板变量（${{project.X}}/${{environment.X}}/${{X}}）
+func (s *ComposeService) createEnvFile(compose *schema.Compose, composeDir string, writeLog func(string)) {
+	// 构建 env 内容（与 TS 版 getCreateEnvFileCommand 一致）
+	envContent := fmt.Sprintf("APP_NAME=%s\n", compose.AppName)
+	if compose.Env != nil && *compose.Env != "" {
+		envContent += *compose.Env + "\n"
+	}
+	if !strings.Contains(envContent, "DOCKER_CONFIG") {
+		envContent += "DOCKER_CONFIG=/root/.docker\n"
+	}
+	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil {
+		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", *compose.ComposeSuffix)
+	}
+
+	// 通过 prepareEnvironmentVariables 解析模板变量
+	var projectEnv, environmentEnv string
+	if compose.Environment != nil {
+		environmentEnv = compose.Environment.Env
+		if compose.Environment.Project != nil {
+			projectEnv = compose.Environment.Project.Env
+		}
+	}
+	resolvedLines := prepareEnvironmentVariables(envContent, projectEnv, environmentEnv)
+	resolvedContent := strings.Join(resolvedLines, "\n") + "\n"
+
+	// 写入 .env 文件到 compose file 所在目录
+	composePth := compose.ComposePath
+	if composePth == "" {
+		composePth = "docker-compose.yml"
+	}
+	envFilePath := filepath.Join(composeDir, filepath.Dir(composePth), ".env")
+	os.MkdirAll(filepath.Dir(envFilePath), 0755)
+
+	if err := os.WriteFile(envFilePath, []byte(resolvedContent), 0644); err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to write .env file: %v", err))
+		}
+		return
+	}
+	if writeLog != nil {
+		writeLog("Created .env file with environment variables ✅")
+	}
 }
 
 // Stop stops a compose project (与 TS 版一致：docker compose stop 或 docker stack rm)。

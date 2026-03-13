@@ -272,6 +272,150 @@ func addSuffixToNetworks(raw map[string]any, suffix string) {
 	}
 }
 
+// InjectDokployNetwork 注入 dokploy-network 到 compose 文件
+// 与 TS 版 addDokployNetworkToRoot + addDokployNetworkToService 一致：
+// 1. 将根 networks 中的 dokploy-network 设为 external: true
+// 2. 为所有 service 添加 dokploy-network（如果尚未包含）
+// 3. 同时保留 default 网络，确保 service 间通信不断
+// isolatedDeployment=true 时不调用此函数（使用独立网络）
+func InjectDokployNetwork(data []byte) ([]byte, error) {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+
+	// 1. 根 networks：确保 dokploy-network 存在且为 external
+	networks, ok := raw["networks"].(map[string]any)
+	if !ok {
+		networks = make(map[string]any)
+	}
+	networks["dokploy-network"] = map[string]any{
+		"external": true,
+	}
+	raw["networks"] = networks
+
+	// 2. 每个 service：确保包含 dokploy-network 和 default
+	services, ok := raw["services"].(map[string]any)
+	if ok {
+		for _, svc := range services {
+			svcMap, ok := svc.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcMap["networks"] = addDokployNetworkToService(svcMap["networks"])
+		}
+	}
+
+	return yaml.Marshal(raw)
+}
+
+// addDokployNetworkToService 为 service 的 networks 添加 dokploy-network 和 default
+// 与 TS 版 addDokployNetworkToService 完全一致
+func addDokployNetworkToService(nets any) any {
+	const network = "dokploy-network"
+	const defaultNet = "default"
+
+	if nets == nil {
+		return []any{network, defaultNet}
+	}
+
+	switch n := nets.(type) {
+	case []any:
+		hasDokploy := false
+		hasDefault := false
+		for _, v := range n {
+			if s, ok := v.(string); ok {
+				if s == network {
+					hasDokploy = true
+				}
+				if s == defaultNet {
+					hasDefault = true
+				}
+			}
+		}
+		if !hasDokploy {
+			n = append(n, network)
+		}
+		if !hasDefault {
+			n = append(n, defaultNet)
+		}
+		return n
+	case map[string]any:
+		if _, ok := n[network]; !ok {
+			n[network] = map[string]any{}
+		}
+		if _, ok := n[defaultNet]; !ok {
+			n[defaultNet] = map[string]any{}
+		}
+		return n
+	}
+
+	return []any{network, defaultNet}
+}
+
+// InjectIsolatedNetwork 为隔离部署注入独立网络（以 appName 命名）
+// 与 TS 版 addAppNameToPreventCollision 一致：
+// 1. addAppNameToRootNetwork + addAppNameToServiceNetworks：注入 appName 网络
+// 2. 如果 isolateVolumes=true：addSuffixToAllVolumes，给 volume 加 appName 后缀防冲突
+func InjectIsolatedNetwork(data []byte, appName string, isolateVolumes ...bool) ([]byte, error) {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+
+	// 根 networks：添加 appName 网络为 external
+	networks, ok := raw["networks"].(map[string]any)
+	if !ok {
+		networks = make(map[string]any)
+	}
+	networks[appName] = map[string]any{
+		"name":     appName,
+		"external": true,
+	}
+	raw["networks"] = networks
+
+	// 每个 service：添加 appName 网络
+	services, ok := raw["services"].(map[string]any)
+	if ok {
+		for _, svc := range services {
+			svcMap, ok := svc.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcNets := svcMap["networks"]
+			if svcNets == nil {
+				svcMap["networks"] = []any{appName}
+				continue
+			}
+			switch n := svcNets.(type) {
+			case []any:
+				found := false
+				for _, v := range n {
+					if s, ok := v.(string); ok && s == appName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					svcMap["networks"] = append(n, appName)
+				}
+			case map[string]any:
+				if _, ok := n[appName]; !ok {
+					n[appName] = map[string]any{}
+				}
+			}
+		}
+	}
+
+	// Volume 隔离：给所有 volume 加 appName 后缀，防止不同 compose 项目间 volume 冲突
+	// 与 TS 版 addSuffixToAllVolumes 一致（仅当 isolatedDeploymentsVolume=true 时生效）
+	if len(isolateVolumes) > 0 && isolateVolumes[0] {
+		addSuffixToVolumes(raw, appName)
+	}
+
+	return yaml.Marshal(raw)
+}
+
 // --- Config transformation ---
 
 func addSuffixToConfigs(raw map[string]any, suffix string) {

@@ -344,6 +344,68 @@ func shellEscapeSingleQuote(s string) string {
 	return strings.ReplaceAll(s, "'", "'\\''")
 }
 
+// StopDatabase 停止数据库服务
+// 与 TS 版 stopService / stopServiceRemote 一致：docker service scale {appName}=0
+// 然后更新数据库状态为 idle
+func (s *DatabaseService) StopDatabase(databaseID string, dbType schema.DatabaseType) error {
+	var appName string
+	var serverID *string
+
+	switch dbType {
+	case schema.DatabaseTypePostgres:
+		var pg schema.Postgres
+		if err := s.db.First(&pg, "\"postgresId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("postgres not found: %w", err)
+		}
+		appName = pg.AppName
+		serverID = pg.ServerID
+		defer s.updatePostgresStatus(databaseID, schema.ApplicationStatusIdle)
+	case schema.DatabaseTypeMySQL:
+		var my schema.MySQL
+		if err := s.db.First(&my, "\"mysqlId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("mysql not found: %w", err)
+		}
+		appName = my.AppName
+		serverID = my.ServerID
+		defer s.updateMySQLStatus(databaseID, schema.ApplicationStatusIdle)
+	case schema.DatabaseTypeMariaDB:
+		var mdb schema.MariaDB
+		if err := s.db.First(&mdb, "\"mariadbId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("mariadb not found: %w", err)
+		}
+		appName = mdb.AppName
+		serverID = mdb.ServerID
+		defer s.updateMariaDBStatus(databaseID, schema.ApplicationStatusIdle)
+	case schema.DatabaseTypeMongo:
+		var m schema.Mongo
+		if err := s.db.First(&m, "\"mongoId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("mongo not found: %w", err)
+		}
+		appName = m.AppName
+		serverID = m.ServerID
+		defer s.updateMongoStatus(databaseID, schema.ApplicationStatusIdle)
+	case schema.DatabaseTypeRedis:
+		var r schema.Redis
+		if err := s.db.First(&r, "\"redisId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("redis not found: %w", err)
+		}
+		appName = r.AppName
+		serverID = r.ServerID
+		defer s.updateRedisStatus(databaseID, schema.ApplicationStatusIdle)
+	default:
+		return fmt.Errorf("unsupported database type: %s", dbType)
+	}
+
+	cmd := fmt.Sprintf("docker service scale %s=0", appName)
+	if serverID != nil {
+		s.execRemoteByServerID(*serverID, cmd)
+	} else {
+		process.ExecAsyncStream(cmd, nil)
+	}
+
+	return nil
+}
+
 func (s *DatabaseService) removeServiceByName(appName string, serverID *string) {
 	cmd := fmt.Sprintf("docker service rm %s", appName)
 	if serverID != nil {

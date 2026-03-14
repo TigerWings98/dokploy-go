@@ -279,9 +279,15 @@ func addSuffixToNetworks(raw map[string]any, suffix string) {
 // 3. 同时保留 default 网络，确保 service 间通信不断
 // isolatedDeployment=true 时不调用此函数（使用独立网络）
 func InjectDokployNetwork(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty compose content")
+	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("compose file is empty or invalid")
 	}
 
 	// 1. 根 networks：确保 dokploy-network 存在且为 external
@@ -358,9 +364,15 @@ func addDokployNetworkToService(nets any) any {
 // 1. addAppNameToRootNetwork + addAppNameToServiceNetworks：注入 appName 网络
 // 2. 如果 isolateVolumes=true：addSuffixToAllVolumes，给 volume 加 appName 后缀防冲突
 func InjectIsolatedNetwork(data []byte, appName string, isolateVolumes ...bool) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty compose content")
+	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("compose file is empty or invalid")
 	}
 
 	// 根 networks：添加 appName 网络为 external

@@ -358,11 +358,17 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 	remoteComposeFile := filepath.Join(projectPath, composePth)
 
 	// 与 TS 版 loadDockerComposeRemote 一致：通过 SSH 读取远程 compose 文件
+	writeLog(fmt.Sprintf("Reading compose file: %s", remoteComposeFile))
 	catResult, err := process.ExecAsyncRemote(conn, fmt.Sprintf("cat %s", remoteComposeFile), nil)
 	if err != nil {
+		writeLog(fmt.Sprintf("Failed to read compose file: %v", err))
 		return fmt.Errorf("failed to read compose file from remote: %w", err)
 	}
 	composeContent := []byte(catResult.Stdout)
+	if len(composeContent) == 0 {
+		writeLog(fmt.Sprintf("Compose file is empty or not found: %s (stderr: %s)", remoteComposeFile, catResult.Stderr))
+		return fmt.Errorf("remote compose file is empty or not found: %s", remoteComposeFile)
+	}
 
 	// 与 TS 版 addDomainToCompose 中的转换逻辑一致：
 	// 1. isolated → randomizeDeployableSpecificationFile (collision prevention + volume isolation)

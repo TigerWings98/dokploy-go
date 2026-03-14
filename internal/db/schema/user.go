@@ -20,7 +20,7 @@ type User struct {
 	ExpirationDate           string     `gorm:"column:expirationDate;type:text;not null" json:"expirationDate"`
 	CreatedAt2               string     `gorm:"column:createdAt;type:text;not null" json:"createdAt2"`
 	CreatedAt                *time.Time `gorm:"column:created_at" json:"createdAt"`
-	TwoFactorEnabled         *bool      `gorm:"column:two_factor_enabled" json:"twoFactorEnabled"`
+	TwoFactorEnabled         *bool      `gorm:"column:two_factor_enabled;not null;default:false" json:"twoFactorEnabled"`
 	Email                    string     `gorm:"column:email;type:text;not null;uniqueIndex:user_email_unique" json:"email"`
 	EmailVerified            bool       `gorm:"column:email_verified;not null" json:"emailVerified"`
 	Image                    *string    `gorm:"column:image;type:text" json:"image"`
@@ -57,6 +57,10 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 	}
 	if u.CreatedAt2 == "" {
 		u.CreatedAt2 = time.Now().UTC().Format(time.RFC3339)
+	}
+	if u.TwoFactorEnabled == nil {
+		f := false
+		u.TwoFactorEnabled = &f
 	}
 	return nil
 }

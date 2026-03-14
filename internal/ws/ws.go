@@ -999,8 +999,16 @@ func (h *Handler) ServerTerminal(c echo.Context) error {
 }
 
 func (h *Handler) serverTerminalLocal(conn *websocket.Conn, port int, username string) {
-	// Read auto-generated SSH key
+	// 与 TS 版 setupLocalServerSSHKey 一致：如果 SSH key 不存在则自动生成
 	keyPath := "/etc/dokploy/ssh/auto_generated-dokploy-local"
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		conn.WriteMessage(websocket.TextMessage, []byte("Generating SSH key for local terminal...\n"))
+		genCmd := exec.Command("ssh-keygen", "-t", "rsa", "-b", "4096", "-f", keyPath, "-N", "", "-C", "dokploy-local-access")
+		if out, err := genCmd.CombinedOutput(); err != nil {
+			conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to generate SSH key: %v\n%s\n", err, string(out))))
+			return
+		}
+	}
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH key not found: %v\n", err)))
@@ -1020,9 +1028,27 @@ func (h *Handler) serverTerminalLocal(conn *websocket.Conn, port int, username s
 		host = strings.TrimSpace(string(out))
 	}
 
+	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Found Docker host: %s\n", host)))
 	conn.WriteMessage(websocket.TextMessage, []byte("Connecting...\n"))
 
-	h.sshShellSession(conn, host, port, username, signer)
+	err = h.sshShellSession(conn, host, port, username, signer)
+	if err != nil {
+		// 与 TS 版一致：SSH 认证失败时提示用户添加公钥到 authorized_keys
+		if strings.Contains(err.Error(), "unable to authenticate") || strings.Contains(err.Error(), "handshake failed") {
+			conn.WriteMessage(websocket.TextMessage, []byte(
+				"Authentication failed: Please run the command below on your server to allow access. "+
+					"Make sure to run it as the same user as the one configured in connection settings:\n"+
+					"# ----------------------------------------\n"+
+					"mkdir -p $HOME/.ssh && \\\n"+
+					"chmod 700 $HOME/.ssh && \\\n"+
+					"touch $HOME/.ssh/authorized_keys && \\\n"+
+					"chmod 600 $HOME/.ssh/authorized_keys && \\\n"+
+					"cat /etc/dokploy/ssh/auto_generated-dokploy-local.pub >> $HOME/.ssh/authorized_keys && \\\n"+
+					"echo \"✓ Dokploy SSH key added successfully. Reopen the terminal in Dokploy to reconnect.\"\n"+
+					"# ----------------------------------------\n"+
+					"\nAfter running the command, reopen this window to reconnect. This procedure is required only once.\n"))
+		}
+	}
 }
 
 func (h *Handler) serverTerminalRemote(conn *websocket.Conn, serverId string) {
@@ -1044,10 +1070,13 @@ func (h *Handler) serverTerminalRemote(conn *websocket.Conn, serverId string) {
 
 	conn.WriteMessage(websocket.TextMessage, []byte("Connecting...\n"))
 
-	h.sshShellSession(conn, server.IPAddress, server.Port, server.Username, signer)
+	if err := h.sshShellSession(conn, server.IPAddress, server.Port, server.Username, signer); err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(
+			"Authentication failed: Unauthorized private SSH key or username.\n❌  Error: %v\n", err)))
+	}
 }
 
-func (h *Handler) sshShellSession(conn *websocket.Conn, host string, port int, username string, signer ssh.Signer) {
+func (h *Handler) sshShellSession(conn *websocket.Conn, host string, port int, username string, signer ssh.Signer) error {
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", host, port), &ssh.ClientConfig{
 		User:            username,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -1056,14 +1085,14 @@ func (h *Handler) sshShellSession(conn *websocket.Conn, host string, port int, u
 	})
 	if err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH connect error: %v\n", err)))
-		return
+		return err
 	}
 	defer client.Close()
 
 	session, err := client.NewSession()
 	if err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("SSH session error: %v\n", err)))
-		return
+		return err
 	}
 	defer session.Close()
 
@@ -1076,7 +1105,7 @@ func (h *Handler) sshShellSession(conn *websocket.Conn, host string, port int, u
 
 	if err := session.Shell(); err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Shell error: %v\n", err)))
-		return
+		return err
 	}
 
 	// Clear terminal once connected
@@ -1111,4 +1140,5 @@ func (h *Handler) sshShellSession(conn *websocket.Conn, host string, port int, u
 
 	stdin.Close()
 	session.Wait()
+	return nil
 }

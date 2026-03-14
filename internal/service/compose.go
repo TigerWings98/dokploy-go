@@ -125,6 +125,13 @@ func (s *ComposeService) Rebuild(composeID string, titleOverride *string) error 
 }
 
 func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.Deployment) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in compose rebuild %s: %v", compose.ComposeID, r)
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, fmt.Sprintf("internal error: %v", r))
+		}
+	}()
+
 	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())
@@ -204,6 +211,14 @@ func (s *ComposeService) runRebuild(compose *schema.Compose, deployment *schema.
 }
 
 func (s *ComposeService) runDeploy(compose *schema.Compose, deployment *schema.Deployment) {
+	// Recover from panic 防止 goroutine 崩溃后 deployment 状态卡在 running
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in compose deploy %s: %v", compose.ComposeID, r)
+			s.failDeployment(deployment.DeploymentID, compose.ComposeID, fmt.Sprintf("internal error: %v", r))
+		}
+	}()
+
 	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		s.failDeployment(deployment.DeploymentID, compose.ComposeID, err.Error())

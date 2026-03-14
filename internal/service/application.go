@@ -110,6 +110,13 @@ func (s *ApplicationService) Deploy(appID string, titleOverride, descOverride *s
 }
 
 func (s *ApplicationService) runDeploy(app *schema.Application, deployment *schema.Deployment) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in app deploy %s: %v", app.ApplicationID, r)
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, fmt.Sprintf("internal error: %v", r))
+		}
+	}()
+
 	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		s.failDeployment(deployment.DeploymentID, app.ApplicationID, fmt.Sprintf("Failed to open log file: %v", err))
@@ -425,6 +432,13 @@ func (s *ApplicationService) Rebuild(appID string, titleOverride, descOverride *
 }
 
 func (s *ApplicationService) runRebuild(app *schema.Application, deployment *schema.Deployment) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in app rebuild %s: %v", app.ApplicationID, r)
+			s.failDeployment(deployment.DeploymentID, app.ApplicationID, fmt.Sprintf("internal error: %v", r))
+		}
+	}()
+
 	logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		s.failDeployment(deployment.DeploymentID, app.ApplicationID, fmt.Sprintf("Failed to open log file: %v", err))

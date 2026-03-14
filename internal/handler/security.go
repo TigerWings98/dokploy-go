@@ -12,6 +12,7 @@ import (
 
 	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -35,9 +36,15 @@ func (h *Handler) CreateSecurity(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
+	// 与 TS 版一致：使用 bcrypt 哈希密码后存储（Traefik basicAuth 需要 htpasswd 格式）
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), 10)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to hash password")
+	}
+
 	s := &schema.Security{
 		Username:      req.Username,
-		Password:      req.Password,
+		Password:      string(hashedPassword),
 		ApplicationID: req.ApplicationID,
 		ComposeID:     req.ComposeID,
 	}
@@ -79,6 +86,15 @@ func (h *Handler) UpdateSecurity(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusNotFound, "Security not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	// 如果更新包含密码，先 bcrypt 哈希
+	if pw, ok := updates["password"].(string); ok && pw != "" {
+		hashed, err := bcrypt.GenerateFromPassword([]byte(pw), 10)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to hash password")
+		}
+		updates["password"] = string(hashed)
 	}
 
 	if err := h.DB.Model(&s).Updates(updates).Error; err != nil {

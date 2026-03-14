@@ -143,6 +143,8 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		appID, _ := in["applicationId"].(string)
 		delete(in, "applicationId")
+		// 与 TS 版一致：禁止修改 serverId
+		delete(in, "serverId")
 		// 过滤不属于 application 表的字段（前端可能发送 composeId/mongoId 等无关 ID）
 		in = h.filterColumns(&schema.Application{}, in)
 
@@ -164,11 +166,9 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		}
 		json.Unmarshal(input, &in)
 		if h.Queue != nil {
-			info, err := h.Queue.EnqueueDeployApplication(in.ApplicationID, in.Title, in.Description)
-			if err != nil {
+			if _, err := h.Queue.EnqueueDeployApplication(in.ApplicationID, in.Title, in.Description); err != nil {
 				return nil, err
 			}
-			return map[string]string{"message": "Deployment queued", "taskId": info.ID}, nil
 		}
 		return true, nil
 	}
@@ -182,11 +182,9 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		}
 		json.Unmarshal(input, &in)
 		if h.Queue != nil {
-			info, err := h.Queue.EnqueueRebuildApplication(in.ApplicationID, in.Title, in.Description)
-			if err != nil {
+			if _, err := h.Queue.EnqueueRebuildApplication(in.ApplicationID, in.Title, in.Description); err != nil {
 				return nil, err
 			}
-			return map[string]string{"message": "Rebuild queued", "taskId": info.ID}, nil
 		}
 		return true, nil
 	}
@@ -235,16 +233,13 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		}
 		newToken := schema.GenerateAppName("refresh")
 		h.DB.Model(&app).Update("refreshToken", newToken)
-		return map[string]string{"token": newToken}, nil
+		return true, nil
 	}
 
-	// saveEnvironment, saveBuildType, saveXxxProvider - generic update
+	// saveEnvironment, saveBuildType, markRunning, updateTraefikConfig - generic update
 	for _, proc := range []string{
 		"saveEnvironment", "saveBuildType",
-		"saveGithubProvider", "saveGitlabProvider", "saveBitbucketProvider",
-		"saveGiteaProvider", "saveDockerProvider", "saveGitProvider",
-		"disconnectGitProvider", "markRunning",
-		"updateTraefikConfig",
+		"markRunning", "updateTraefikConfig",
 	} {
 		procName := proc
 		r["application."+procName] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
@@ -263,6 +258,87 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 			}
 			return app, nil
 		}
+	}
+
+	// saveXxxProvider - 切换 git 提供商时重置 applicationStatus 为 idle（与 TS 版一致）
+	for _, proc := range []string{
+		"saveGithubProvider", "saveGitlabProvider", "saveBitbucketProvider",
+		"saveGiteaProvider", "saveDockerProvider", "saveGitProvider",
+	} {
+		procName := proc
+		r["application."+procName] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+			var in map[string]interface{}
+			json.Unmarshal(input, &in)
+			appID, _ := in["applicationId"].(string)
+			delete(in, "applicationId")
+			in = h.filterColumns(&schema.Application{}, in)
+			// 与 TS 版一致：切换提供商时重置应用状态为 idle
+			in["applicationStatus"] = "idle"
+
+			var app schema.Application
+			if err := h.DB.First(&app, "\"applicationId\" = ?", appID).Error; err != nil {
+				return nil, &trpcErr{"Application not found", "NOT_FOUND", 404}
+			}
+			if len(in) > 0 {
+				h.DB.Model(&app).Updates(in)
+			}
+			return app, nil
+		}
+	}
+
+	// disconnectGitProvider - 断开 git 提供商时显式清零所有 git 相关字段（与 TS 版一致）
+	r["application.disconnectGitProvider"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct{ ApplicationID string `json:"applicationId"` }
+		json.Unmarshal(input, &in)
+
+		var app schema.Application
+		if err := h.DB.First(&app, "\"applicationId\" = ?", in.ApplicationID).Error; err != nil {
+			return nil, &trpcErr{"Application not found", "NOT_FOUND", 404}
+		}
+
+		// 与 TS 版 disconnectGitProvider 一致：重置所有 git 提供商字段
+		resetFields := map[string]interface{}{
+			// GitHub
+			"repository":  nil,
+			"owner":       nil,
+			"branch":      nil,
+			"buildPath":   "/",
+			"githubId":    nil,
+			// GitLab
+			"gitlabRepository":    nil,
+			"gitlabOwner":         nil,
+			"gitlabBranch":        nil,
+			"gitlabBuildPath":     "/",
+			"gitlabId":            nil,
+			"gitlabProjectId":     nil,
+			"gitlabPathNamespace": nil,
+			// Bitbucket
+			"bitbucketRepository": nil,
+			"bitbucketOwner":      nil,
+			"bitbucketBranch":     nil,
+			"bitbucketBuildPath":  "/",
+			"bitbucketId":         nil,
+			// Gitea
+			"giteaRepository": nil,
+			"giteaOwner":      nil,
+			"giteaBranch":     nil,
+			"giteaBuildPath":  "/",
+			"giteaId":         nil,
+			// Custom Git
+			"customGitBranch":    nil,
+			"customGitBuildPath": nil,
+			"customGitUrl":       nil,
+			"customGitSSHKeyId":  nil,
+			// 通用
+			"sourceType":        "github",
+			"applicationStatus": "idle",
+			"watchPaths":        nil,
+			"enableSubmodules":  false,
+			"triggerType":       "push",
+		}
+
+		h.DB.Model(&app).Updates(resetFields)
+		return app, nil
 	}
 
 	r["application.cancelDeployment"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

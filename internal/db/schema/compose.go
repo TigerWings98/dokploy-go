@@ -31,26 +31,51 @@ type Compose struct {
 	EnvironmentID string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
 	ServerID      *string           `gorm:"column:serverId;type:text" json:"serverId"`
 
-	// Git fields (same pattern as Application)
-	Repository   *string `gorm:"column:repository;type:text" json:"repository"`
-	Owner        *string `gorm:"column:owner;type:text" json:"owner"`
-	Branch       *string `gorm:"column:branch;type:text" json:"branch"`
-	BuildPath    *string `gorm:"column:buildPath;type:text;default:'/'" json:"buildPath"`
-	GithubID     *string `gorm:"column:githubId;type:text" json:"githubId"`
-	GitlabID     *string `gorm:"column:gitlabId;type:text" json:"gitlabId"`
-	GiteaID      *string `gorm:"column:giteaId;type:text" json:"giteaId"`
-	BitbucketID  *string `gorm:"column:bitbucketId;type:text" json:"bitbucketId"`
-	CustomGitURL *string `gorm:"column:customGitUrl;type:text" json:"customGitUrl"`
-	CustomGitBranch *string `gorm:"column:customGitBranch;type:text" json:"customGitBranch"`
-	CustomGitBuildPath *string `gorm:"column:customGitBuildPath;type:text" json:"customGitBuildPath"`
+	// GitHub 字段
+	Repository *string `gorm:"column:repository;type:text" json:"repository"`
+	Owner      *string `gorm:"column:owner;type:text" json:"owner"`
+	Branch     *string `gorm:"column:branch;type:text" json:"branch"`
+
+	// GitLab 字段
+	GitlabProjectID     *int    `gorm:"column:gitlabProjectId" json:"gitlabProjectId"`
+	GitlabRepository    *string `gorm:"column:gitlabRepository;type:text" json:"gitlabRepository"`
+	GitlabOwner         *string `gorm:"column:gitlabOwner;type:text" json:"gitlabOwner"`
+	GitlabBranch        *string `gorm:"column:gitlabBranch;type:text" json:"gitlabBranch"`
+	GitlabPathNamespace *string `gorm:"column:gitlabPathNamespace;type:text" json:"gitlabPathNamespace"`
+
+	// Bitbucket 字段
+	BitbucketRepository     *string `gorm:"column:bitbucketRepository;type:text" json:"bitbucketRepository"`
+	BitbucketRepositorySlug *string `gorm:"column:bitbucketRepositorySlug;type:text" json:"bitbucketRepositorySlug"`
+	BitbucketOwner          *string `gorm:"column:bitbucketOwner;type:text" json:"bitbucketOwner"`
+	BitbucketBranch         *string `gorm:"column:bitbucketBranch;type:text" json:"bitbucketBranch"`
+
+	// Gitea 字段
+	GiteaRepository *string `gorm:"column:giteaRepository;type:text" json:"giteaRepository"`
+	GiteaOwner      *string `gorm:"column:giteaOwner;type:text" json:"giteaOwner"`
+	GiteaBranch     *string `gorm:"column:giteaBranch;type:text" json:"giteaBranch"`
+
+	// 自定义 Git 字段
+	CustomGitURL      *string `gorm:"column:customGitUrl;type:text" json:"customGitUrl"`
+	CustomGitBranch   *string `gorm:"column:customGitBranch;type:text" json:"customGitBranch"`
 	CustomGitSSHKeyID *string `gorm:"column:customGitSSHKeyId;type:text" json:"customGitSSHKeyId"`
 
+	// 子模块 & 触发器
+	EnableSubmodules bool    `gorm:"column:enableSubmodules;not null;default:false" json:"enableSubmodules"`
+	TriggerType      *string `gorm:"column:triggerType;type:text;default:'push'" json:"triggerType"`
+	WatchPaths       StringArray `gorm:"column:watchPaths;type:text[]" json:"watchPaths"`
+
 	// Suffix for compose project name
-	ComposeSuffix *string `gorm:"column:suffix;type:text" json:"suffix"`
+	ComposeSuffix string `gorm:"column:suffix;type:text;not null;default:''" json:"suffix"`
 
 	// 隔离部署：为 compose 创建独立 Docker 网络
-	IsolatedDeployment       bool `gorm:"column:isolatedDeployment;not null;default:false" json:"isolatedDeployment"`
+	IsolatedDeployment        bool `gorm:"column:isolatedDeployment;not null;default:false" json:"isolatedDeployment"`
 	IsolatedDeploymentsVolume bool `gorm:"column:isolatedDeploymentsVolume;not null;default:false" json:"isolatedDeploymentsVolume"`
+
+	// 提供商外键
+	GithubID    *string `gorm:"column:githubId;type:text" json:"githubId"`
+	GitlabID    *string `gorm:"column:gitlabId;type:text" json:"gitlabId"`
+	BitbucketID *string `gorm:"column:bitbucketId;type:text" json:"bitbucketId"`
+	GiteaID     *string `gorm:"column:giteaId;type:text" json:"giteaId"`
 
 	// Relations
 	Environment     *Environment `gorm:"foreignKey:EnvironmentID;references:EnvironmentID" json:"environment,omitempty"`

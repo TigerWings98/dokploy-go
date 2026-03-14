@@ -110,6 +110,8 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		composeID, _ := in["composeId"].(string)
 		delete(in, "composeId")
+		// 与 TS 版 apiUpdateCompose.omit({ serverId: true }) 一致：禁止修改 serverId
+		delete(in, "serverId")
 		// TS 版通过 Zod apiUpdateCompose 过滤无关字段，Go 版需显式过滤
 		// 前端可能发送 mongoId/mysqlId/mariadbId/postgresId/redisId 等不属于 compose 表的字段
 		in = h.filterColumns(&schema.Compose{}, in)
@@ -124,7 +126,10 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 	}
 
 	r["compose.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
-		var in struct{ ComposeID string `json:"composeId"` }
+		var in struct {
+			ComposeID     string `json:"composeId"`
+			DeleteVolumes bool   `json:"deleteVolumes"`
+		}
 		json.Unmarshal(input, &in)
 
 		var comp schema.Compose
@@ -133,12 +138,41 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}
 		}
 
-		// 1. Stop and remove compose containers
-		composeDir := ""
-		if h.Config != nil {
-			composeDir = filepath.Join(h.Config.Paths.ComposePath, comp.AppName)
+		// 1. 删除 DB 记录（先删以获取完整对象用于清理）
+		if err := h.DB.Delete(&schema.Compose{}, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, err
 		}
-		stopCmd := fmt.Sprintf("docker compose -p %s down", comp.AppName)
+
+		// 2. 取消队列中的待处理任务
+		if h.Queue != nil {
+			h.Queue.CancelJobsByFilter("appName", comp.AppName)
+		}
+
+		// 3. Docker 清理：断开网络 + 停止/删除容器（区分 stack 和 docker-compose）
+		projectPath := ""
+		if h.Config != nil {
+			projectPath = filepath.Join(h.Config.Paths.ComposePath, comp.AppName)
+		}
+
+		var removeCmd string
+		if comp.ComposeType == schema.ComposeTypeStack {
+			// Stack 类型：docker stack rm
+			removeCmd = fmt.Sprintf(
+				"docker network disconnect %s dokploy-traefik || true; docker stack rm %s; rm -rf %s",
+				comp.AppName, comp.AppName, projectPath,
+			)
+		} else {
+			// Docker-compose 类型：docker compose down [--volumes]
+			volumesFlag := ""
+			if in.DeleteVolumes {
+				volumesFlag = " --volumes"
+			}
+			removeCmd = fmt.Sprintf(
+				"docker network disconnect %s dokploy-traefik || true; cd %s && docker compose -p %s down%s; rm -rf %s",
+				comp.AppName, projectPath, comp.AppName, volumesFlag, projectPath,
+			)
+		}
+
 		if comp.ServerID != nil && comp.Server != nil && comp.Server.SSHKey != nil {
 			conn := process.SSHConnection{
 				Host:       comp.Server.IPAddress,
@@ -146,26 +180,24 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 				Username:   comp.Server.Username,
 				PrivateKey: comp.Server.SSHKey.PrivateKey,
 			}
-			process.ExecAsyncRemote(conn, stopCmd, nil)
-		} else if composeDir != "" {
-			process.ExecAsyncStream(stopCmd, nil, process.WithDir(composeDir))
+			process.ExecAsyncRemote(conn, removeCmd, nil)
+		} else {
+			process.ExecAsyncStream(removeCmd, nil)
 		}
 
-		// 2. Remove Traefik config
+		// 4. 清理部署日志目录
+		if h.Config != nil {
+			os.RemoveAll(filepath.Join(h.Config.Paths.LogsPath, comp.AppName))
+		}
+
+		// 5. 清理部署记录
+		h.DB.Where("\"composeId\" = ?", in.ComposeID).Delete(&schema.Deployment{})
+
+		// 6. 删除 Traefik 配置
 		if h.Traefik != nil {
 			h.Traefik.RemoveApplicationConfig(comp.AppName)
 		}
 
-		// 3. Remove source code and log directories
-		if h.Config != nil {
-			os.RemoveAll(filepath.Join(h.Config.Paths.ComposePath, comp.AppName))
-			os.RemoveAll(filepath.Join(h.Config.Paths.LogsPath, comp.AppName))
-		}
-
-		// 4. Delete from database
-		if err := h.DB.Delete(&schema.Compose{}, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
-			return nil, err
-		}
 		return true, nil
 	}
 

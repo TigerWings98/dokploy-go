@@ -438,6 +438,35 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 	r["environment.remove"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct{ EnvironmentID string `json:"environmentId"` }
 		json.Unmarshal(input, &in)
+
+		// 查找环境
+		var env schema.Environment
+		if err := h.DB.Where("\"environmentId\" = ?", in.EnvironmentID).First(&env).Error; err != nil {
+			return nil, echo.NewHTTPError(404, "Environment not found")
+		}
+
+		// 不能删除默认环境（与 TS 版一致）
+		if env.IsDefault {
+			return nil, echo.NewHTTPError(400, "Cannot delete the default environment")
+		}
+
+		// 检查环境下是否有活跃服务（应用/compose/数据库）
+		var svcCount int64
+		h.DB.Model(&schema.Application{}).Where("\"environmentId\" = ?", in.EnvironmentID).Count(&svcCount)
+		if svcCount > 0 {
+			return nil, echo.NewHTTPError(400, "Cannot delete environment: it has active services. Delete all services first.")
+		}
+		h.DB.Model(&schema.Compose{}).Where("\"environmentId\" = ?", in.EnvironmentID).Count(&svcCount)
+		if svcCount > 0 {
+			return nil, echo.NewHTTPError(400, "Cannot delete environment: it has active services. Delete all services first.")
+		}
+		for _, dbModel := range []interface{}{&schema.Postgres{}, &schema.MySQL{}, &schema.MariaDB{}, &schema.Mongo{}, &schema.Redis{}} {
+			h.DB.Model(dbModel).Where("\"environmentId\" = ?", in.EnvironmentID).Count(&svcCount)
+			if svcCount > 0 {
+				return nil, echo.NewHTTPError(400, "Cannot delete environment: it has active services. Delete all services first.")
+			}
+		}
+
 		h.DB.Delete(&schema.Environment{}, "\"environmentId\" = ?", in.EnvironmentID)
 		return true, nil
 	}

@@ -391,8 +391,8 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 	// 3. 网络注入（dokploy-network 或 isolated network）
 	if compose.IsolatedDeployment {
 		suffix := compose.AppName
-		if compose.ComposeSuffix != nil && *compose.ComposeSuffix != "" {
-			suffix = *compose.ComposeSuffix
+		if compose.ComposeSuffix != "" {
+			suffix = compose.ComposeSuffix
 		}
 		// InjectIsolatedNetwork 包含了 appName 网络注入 + 可选的 volume suffix
 		if transformed, err := composepkg.InjectIsolatedNetwork(composeContent, suffix, compose.IsolatedDeploymentsVolume); err == nil {
@@ -400,8 +400,8 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 		}
 	} else {
 		// 非隔离：先 randomize suffix，再注入 dokploy-network
-		if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil {
-			if transformed, err := composepkg.AddSuffixToAll(composeContent, *compose.ComposeSuffix); err == nil {
+		if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" {
+			if transformed, err := composepkg.AddSuffixToAll(composeContent, compose.ComposeSuffix); err == nil {
 				composeContent = transformed
 			}
 		}
@@ -436,8 +436,8 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 	if !strings.Contains(envContent, "DOCKER_CONFIG") {
 		envContent += "DOCKER_CONFIG=/root/.docker\n"
 	}
-	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil {
-		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", *compose.ComposeSuffix)
+	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" {
+		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", compose.ComposeSuffix)
 	}
 	var projectEnv, environmentEnv string
 	if compose.Environment != nil {
@@ -540,8 +540,8 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 
 	// 应用 randomize 后缀转换（与 TS 版 randomizeSpecificationFile 一致）
 	// 非隔离模式下，randomize=true 时给 services/volumes/networks/configs/secrets 加后缀
-	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil && !compose.IsolatedDeployment {
-		s.applySuffixToComposeFile(compose, composeDir, composePth, *compose.ComposeSuffix, writeLog)
+	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" && !compose.IsolatedDeployment {
+		s.applySuffixToComposeFile(compose, composeDir, composePth, compose.ComposeSuffix, writeLog)
 	}
 
 	// 注入网络到 compose 文件（与 TS 版 addDomainToCompose 一致）
@@ -569,8 +569,8 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 		switch compose.ComposeType {
 		case schema.ComposeTypeStack:
 			stackName := compose.AppName
-			if compose.ComposeSuffix != nil {
-				stackName = *compose.ComposeSuffix
+			if compose.ComposeSuffix != "" {
+				stackName = compose.ComposeSuffix
 			}
 			// Stack deploy：需要 export 环境变量（与 TS 版 getExportEnvCommand 一致）
 			exportCmd := s.getExportEnvCommand(compose)
@@ -780,8 +780,8 @@ func (s *ComposeService) createEnvFile(compose *schema.Compose, composeDir strin
 	if !strings.Contains(envContent, "DOCKER_CONFIG") {
 		envContent += "DOCKER_CONFIG=/root/.docker\n"
 	}
-	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != nil {
-		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", *compose.ComposeSuffix)
+	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" {
+		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", compose.ComposeSuffix)
 	}
 
 	// 通过 prepareEnvironmentVariables 解析模板变量

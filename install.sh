@@ -11,13 +11,16 @@
 #   DOCKER_IMAGE       - Full image reference (default: dokploy/dokploy:$VERSION)
 #   ADVERTISE_ADDR     - Docker Swarm advertise address (default: auto-detect private IP)
 #   DOCKER_SWARM_INIT_ARGS - Extra args for docker swarm init (e.g. --default-addr-pool)
+#   REGISTRY_URL       - Private registry URL (e.g. registry.example.com)
+#   REGISTRY_USERNAME  - Private registry username
+#   REGISTRY_PASSWORD  - Private registry password
 
 # ============================================================
 # Configuration - Change these to match your registry
 # ============================================================
 
 # Default Docker image (override with DOCKER_IMAGE env var)
-DEFAULT_REGISTRY="dokploy/dokploy"
+DEFAULT_REGISTRY="crpi-aslakz6qmbvaprxp.cn-shanghai.personal.cr.aliyuncs.com/tigerking/dokploy-go"
 
 # ============================================================
 # Helper Functions
@@ -27,23 +30,8 @@ detect_version() {
     local version="${DOKPLOY_VERSION}"
 
     if [ -z "$version" ]; then
-        echo "Detecting latest version from registry..." >&2
-
-        # Try to list tags from Docker Hub / OCI registry and pick the latest semver
-        local tags
-        tags=$(curl -fsSL "https://registry.hub.docker.com/v2/repositories/${DEFAULT_REGISTRY}/tags/?page_size=50&ordering=last_updated" 2>/dev/null \
-            | grep -o '"name":"[^"]*"' | sed 's/"name":"//;s/"//' \
-            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sort -t. -k1,1nr -k2,2nr -k3,3nr \
-            | head -n1)
-
-        if [ -n "$tags" ]; then
-            version="$tags"
-            echo "Latest version detected: $version" >&2
-        else
-            version="latest"
-            echo "Warning: Could not detect latest version, using 'latest'" >&2
-        fi
+        version="latest"
+        echo "No DOKPLOY_VERSION specified, using '$version'" >&2
     fi
 
     echo "$version"
@@ -167,6 +155,17 @@ install_dokploy() {
     else
         echo "Installing Docker..."
         curl -sSL https://get.docker.com | sh -s -- --version 28.5.0
+    fi
+
+    # --- Login to private registry if credentials provided ---
+    if [ -n "$REGISTRY_URL" ]; then
+        if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            echo "Logging in to private registry: $REGISTRY_URL"
+            echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USERNAME" --password-stdin
+        else
+            echo "Error: REGISTRY_URL is set but REGISTRY_USERNAME or REGISTRY_PASSWORD is missing" >&2
+            exit 1
+        fi
     fi
 
     # --- Proxmox LXC detection ---

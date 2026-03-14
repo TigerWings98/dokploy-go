@@ -76,6 +76,16 @@ func (h *Handler) RegisterFrontendRoutes(e *echo.Echo) {
 			return c.Redirect(http.StatusFound, "/")
 		}
 
+		// 全新安装：没有管理员时，登录页重定向到注册页（与 TS 版 getServerSideProps 一致）
+		if path == "/" && !h.DB.IsAdminPresent() {
+			return c.Redirect(http.StatusFound, "/register")
+		}
+
+		// 已有管理员时，注册页重定向到登录页（与 TS 版一致）
+		if path == "/register" && h.DB.IsAdminPresent() {
+			return c.Redirect(http.StatusFound, "/")
+		}
+
 		// Redirect authenticated users from login/register pages to dashboard
 		if (path == "/" || path == "/register" || path == "/send-reset-password") && h.isAuthenticated(c) {
 			return c.Redirect(http.StatusFound, "/dashboard/projects")

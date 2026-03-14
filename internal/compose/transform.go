@@ -301,11 +301,15 @@ func InjectDokployNetwork(data []byte) ([]byte, error) {
 	raw["networks"] = networks
 
 	// 2. 每个 service：确保包含 dokploy-network 和 default
+	// 跳过设置了 network_mode 的 service（network_mode 与 networks 在 Docker Compose 中互斥）
 	services, ok := raw["services"].(map[string]any)
 	if ok {
 		for _, svc := range services {
 			svcMap, ok := svc.(map[string]any)
 			if !ok {
+				continue
+			}
+			if _, hasNetworkMode := svcMap["network_mode"]; hasNetworkMode {
 				continue
 			}
 			svcMap["networks"] = addDokployNetworkToService(svcMap["networks"])
@@ -387,11 +391,15 @@ func InjectIsolatedNetwork(data []byte, appName string, isolateVolumes ...bool) 
 	raw["networks"] = networks
 
 	// 每个 service：添加 appName 网络
+	// 跳过设置了 network_mode 的 service（network_mode 与 networks 在 Docker Compose 中互斥）
 	services, ok := raw["services"].(map[string]any)
 	if ok {
 		for _, svc := range services {
 			svcMap, ok := svc.(map[string]any)
 			if !ok {
+				continue
+			}
+			if _, hasNetworkMode := svcMap["network_mode"]; hasNetworkMode {
 				continue
 			}
 			svcNets := svcMap["networks"]

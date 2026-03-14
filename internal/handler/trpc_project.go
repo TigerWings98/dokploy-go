@@ -93,6 +93,20 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 		if err := h.DB.Create(project).Error; err != nil {
 			return nil, err
 		}
+
+		// 与 TS 版一致：创建项目后自动创建默认 "production" 环境
+		prodDesc := "Production environment"
+		env := &schema.Environment{
+			Name:        "production",
+			Description: &prodDesc,
+			ProjectID:   project.ProjectID,
+			IsDefault:   true,
+		}
+		if err := h.DB.Create(env).Error; err != nil {
+			return nil, err
+		}
+		project.Environments = []schema.Environment{*env}
+
 		return project, nil
 	}
 

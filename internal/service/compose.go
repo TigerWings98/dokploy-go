@@ -833,10 +833,11 @@ func (s *ComposeService) Stop(composeID string) error {
 			_, err = process.ExecAsyncStream(cmd, nil)
 		}
 	default:
-		cmd := fmt.Sprintf("docker compose -p %s stop", compose.AppName)
+		// 与 TS 版一致：使用 env -i PATH="$PATH" 隔离环境变量
+		cmd := fmt.Sprintf(`env -i PATH="$PATH" docker compose -p %s stop`, compose.AppName)
 		if isRemote {
-			// 远程：使用远程路径
-			remoteDir := fmt.Sprintf("/etc/dokploy/compose/%s/code", compose.AppName)
+			// 与 TS 版一致：cwd 为 COMPOSE_PATH/appName（不含 /code）
+			remoteDir := fmt.Sprintf("/etc/dokploy/compose/%s", compose.AppName)
 			conn := s.sshConn(compose.Server)
 			_, err = process.ExecAsyncRemote(conn, fmt.Sprintf("cd %s && %s", remoteDir, cmd), nil)
 		} else {
@@ -861,15 +862,21 @@ func (s *ComposeService) Start(composeID string) error {
 		return err
 	}
 
-	if compose.ComposeType == schema.ComposeTypeStack {
-		return fmt.Errorf("stack compose does not support start, use deploy instead")
+	// 与 TS 版一致：stack 类型静默跳过，仅更新状态为 done
+	if compose.ComposeType != schema.ComposeTypeDocker {
+		s.updateStatus(composeID, schema.ApplicationStatusDone)
+		return nil
 	}
 
 	composePath := compose.ComposePath
-	if composePath == "" {
-		composePath = "./docker-compose.yml"
+	if compose.SourceType == schema.SourceTypeComposeRaw {
+		composePath = "docker-compose.yml"
 	}
-	cmd := fmt.Sprintf("docker compose -p %s -f %s up -d", compose.AppName, composePath)
+	if composePath == "" {
+		composePath = "docker-compose.yml"
+	}
+	// 与 TS 版一致：使用 env -i PATH="$PATH" 隔离环境变量
+	cmd := fmt.Sprintf(`env -i PATH="$PATH" docker compose -p %s -f %s up -d`, compose.AppName, composePath)
 
 	isRemote := compose.ServerID != nil && compose.Server != nil && compose.Server.SSHKey != nil
 	if isRemote {

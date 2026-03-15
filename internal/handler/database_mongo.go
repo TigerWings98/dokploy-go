@@ -125,14 +125,10 @@ func (h *Handler) DeployMongo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueDeployDatabase(id, "mongo")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued", "taskId": info.ID})
+	if h.DBSvc != nil {
+		go h.DBSvc.DeployMongo(id, nil)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment started"})
 }
 
 func (h *Handler) StopMongo(c echo.Context) error {
@@ -146,14 +142,10 @@ func (h *Handler) StopMongo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueStopDatabase(id, "mongo")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
+	if h.DBSvc != nil {
+		go h.DBSvc.StopDatabase(id, schema.DatabaseTypeMongo)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Stop started"})
 }
 
 func (h *Handler) StartMongo(c echo.Context) error {

@@ -127,14 +127,11 @@ func (h *Handler) DeployPostgres(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueDeployDatabase(id, "postgres")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued", "taskId": info.ID})
+	// 与 TS 版对齐：内联执行，不走队列
+	if h.DBSvc != nil {
+		go h.DBSvc.DeployPostgres(id, nil)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment started"})
 }
 
 func (h *Handler) StopPostgres(c echo.Context) error {
@@ -148,14 +145,11 @@ func (h *Handler) StopPostgres(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueStopDatabase(id, "postgres")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
+	// 与 TS 版对齐：内联执行，不走队列
+	if h.DBSvc != nil {
+		go h.DBSvc.StopDatabase(id, schema.DatabaseTypePostgres)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Stop started"})
 }
 
 func (h *Handler) StartPostgres(c echo.Context) error {

@@ -37,19 +37,17 @@ func IsRedisAvailable(addr string) bool {
 }
 
 // Task types
+// 注意：数据库相关任务（deploy/rebuild/stop database）已移除，与 TS 版对齐改为内联执行
 const (
-	TaskDeployApplication = "deploy:application"
-	TaskDeployCompose     = "deploy:compose"
-	TaskDeployDatabase    = "deploy:database"
-	TaskRebuildDatabase   = "rebuild:database"
+	TaskDeployApplication  = "deploy:application"
+	TaskDeployCompose      = "deploy:compose"
 	TaskRebuildApplication = "rebuild:application"
 	TaskRebuildCompose     = "rebuild:compose"
 	TaskStopApplication    = "stop:application"
 	TaskStartApplication   = "start:application"
 	TaskStopCompose        = "stop:compose"
-	TaskStopDatabase       = "stop:database"
-	TaskBackupRun         = "backup:run"
-	TaskDockerCleanup     = "docker:cleanup"
+	TaskBackupRun          = "backup:run"
+	TaskDockerCleanup      = "docker:cleanup"
 )
 
 // DeployApplicationPayload is the payload for application deployment tasks.
@@ -63,12 +61,6 @@ type DeployApplicationPayload struct {
 type DeployComposePayload struct {
 	ComposeID string  `json:"composeId"`
 	Title     *string `json:"title,omitempty"`
-}
-
-// DeployDatabasePayload is the payload for database deployment tasks.
-type DeployDatabasePayload struct {
-	DatabaseID string `json:"databaseId"`
-	Type       string `json:"type"` // postgres, mysql, mariadb, mongo, redis
 }
 
 // SimpleIDPayload is a payload with just an ID.
@@ -179,26 +171,6 @@ func (q *Queue) EnqueueRebuildCompose(composeID string, title *string) (*asynq.T
 	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
 }
 
-// EnqueueDeployDatabase enqueues a database deployment.
-func (q *Queue) EnqueueDeployDatabase(databaseID, dbType string) (*asynq.TaskInfo, error) {
-	payload, _ := json.Marshal(DeployDatabasePayload{
-		DatabaseID: databaseID,
-		Type:       dbType,
-	})
-	task := asynq.NewTask(TaskDeployDatabase, payload)
-	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
-}
-
-// EnqueueRebuildDatabase enqueues a database rebuild.
-func (q *Queue) EnqueueRebuildDatabase(databaseID, dbType string) (*asynq.TaskInfo, error) {
-	payload, _ := json.Marshal(DeployDatabasePayload{
-		DatabaseID: databaseID,
-		Type:       dbType,
-	})
-	task := asynq.NewTask(TaskRebuildDatabase, payload)
-	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
-}
-
 // EnqueueStopApplication enqueues an application stop.
 func (q *Queue) EnqueueStopApplication(appID string) (*asynq.TaskInfo, error) {
 	payload, _ := json.Marshal(SimpleIDPayload{ID: appID})
@@ -217,16 +189,6 @@ func (q *Queue) EnqueueStartApplication(appID string) (*asynq.TaskInfo, error) {
 func (q *Queue) EnqueueStopCompose(composeID string) (*asynq.TaskInfo, error) {
 	payload, _ := json.Marshal(SimpleIDPayload{ID: composeID})
 	task := asynq.NewTask(TaskStopCompose, payload)
-	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
-}
-
-// EnqueueStopDatabase enqueues a database stop.
-func (q *Queue) EnqueueStopDatabase(databaseID, dbType string) (*asynq.TaskInfo, error) {
-	payload, _ := json.Marshal(DeployDatabasePayload{
-		DatabaseID: databaseID,
-		Type:       dbType,
-	})
-	task := asynq.NewTask(TaskStopDatabase, payload)
 	return q.client.Enqueue(task, asynq.Queue("deployments"), asynq.MaxRetry(0))
 }
 
@@ -300,19 +262,17 @@ type Worker struct {
 }
 
 // TaskHandlers holds the service dependencies for task handlers.
+// 注意：数据库相关 handler 已移除，与 TS 版对齐改为内联执行
 type TaskHandlers struct {
 	HandleDeployApplication  func(ctx context.Context, payload DeployApplicationPayload) error
 	HandleRebuildApplication func(ctx context.Context, payload DeployApplicationPayload) error
 	HandleDeployCompose      func(ctx context.Context, payload DeployComposePayload) error
 	HandleRebuildCompose     func(ctx context.Context, payload DeployComposePayload) error
-	HandleDeployDatabase     func(ctx context.Context, payload DeployDatabasePayload) error
-	HandleRebuildDatabase    func(ctx context.Context, payload DeployDatabasePayload) error
-	HandleStopCompose       func(ctx context.Context, payload SimpleIDPayload) error
-	HandleStopApplication   func(ctx context.Context, payload SimpleIDPayload) error
-	HandleStopDatabase      func(ctx context.Context, payload DeployDatabasePayload) error
-	HandleStartApplication  func(ctx context.Context, payload SimpleIDPayload) error
-	HandleBackupRun         func(ctx context.Context, payload SimpleIDPayload) error
-	HandleDockerCleanup     func(ctx context.Context) error
+	HandleStopCompose        func(ctx context.Context, payload SimpleIDPayload) error
+	HandleStopApplication    func(ctx context.Context, payload SimpleIDPayload) error
+	HandleStartApplication   func(ctx context.Context, payload SimpleIDPayload) error
+	HandleBackupRun          func(ctx context.Context, payload SimpleIDPayload) error
+	HandleDockerCleanup      func(ctx context.Context) error
 }
 
 // NewWorker creates a new task worker.
@@ -336,11 +296,8 @@ func NewWorker(redisAddr string, concurrency int, handlers TaskHandlers) *Worker
 	mux.HandleFunc(TaskRebuildApplication, makeHandler(handlers.HandleRebuildApplication))
 	mux.HandleFunc(TaskDeployCompose, makeHandler(handlers.HandleDeployCompose))
 	mux.HandleFunc(TaskRebuildCompose, makeHandler(handlers.HandleRebuildCompose))
-	mux.HandleFunc(TaskDeployDatabase, makeHandler(handlers.HandleDeployDatabase))
-	mux.HandleFunc(TaskRebuildDatabase, makeHandler(handlers.HandleRebuildDatabase))
 	mux.HandleFunc(TaskStopCompose, makeHandler(handlers.HandleStopCompose))
 	mux.HandleFunc(TaskStopApplication, makeHandler(handlers.HandleStopApplication))
-	mux.HandleFunc(TaskStopDatabase, makeHandler(handlers.HandleStopDatabase))
 	mux.HandleFunc(TaskStartApplication, makeHandler(handlers.HandleStartApplication))
 	mux.HandleFunc(TaskBackupRun, makeHandler(handlers.HandleBackupRun))
 	mux.HandleFunc(TaskDockerCleanup, func(ctx context.Context, t *asynq.Task) error {

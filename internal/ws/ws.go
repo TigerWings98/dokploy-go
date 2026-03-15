@@ -48,6 +48,12 @@ type Handler struct {
 	Auth           *auth.Auth
 	MonitoringPath string
 	BackupSvc      BackupRestorer
+	DBSvc          DatabaseDeployer
+}
+
+// DatabaseDeployer 数据库部署接口（与 TS 版对齐：内联执行，支持日志回调）
+type DatabaseDeployer interface {
+	DeployByType(databaseID, dbType string, onData func(string)) error
 }
 
 // NewHandler creates a new WebSocket handler.

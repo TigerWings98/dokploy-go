@@ -168,7 +168,7 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 				volumesFlag = " --volumes"
 			}
 			removeCmd = fmt.Sprintf(
-				"docker network disconnect %s dokploy-traefik || true; cd %s && docker compose -p %s down%s; rm -rf %s",
+				`docker network disconnect %s dokploy-traefik || true; cd %s && env -i PATH="$PATH" docker compose -p %s down%s; rm -rf %s`,
 				comp.AppName, projectPath, comp.AppName, volumesFlag, projectPath,
 			)
 		}

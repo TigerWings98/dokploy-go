@@ -125,28 +125,35 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry) {
 			return true, nil
 		}
 
+		// 与 TS 版对齐：数据库 deploy/stop/rebuild 内联执行，不走队列
 		r[d.routerName+".deploy"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 			var in map[string]interface{}
 			json.Unmarshal(input, &in)
 			id, _ := in[d.idField].(string)
-			if h.Queue != nil {
-				if _, err := h.Queue.EnqueueDeployDatabase(id, d.routerName); err != nil {
-					return nil, err
-				}
+			if h.DBSvc != nil {
+				go h.DBSvc.DeployByType(id, d.routerName, nil)
 			}
 			return true, nil
 		}
-		r[d.routerName+".start"] = r[d.routerName+".deploy"]
+
+		r[d.routerName+".start"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+			var in map[string]interface{}
+			json.Unmarshal(input, &in)
+			id, _ := in[d.idField].(string)
+			if h.DBSvc != nil {
+				go h.DBSvc.StartDatabase(id, schema.DatabaseType(d.routerName))
+			}
+			return true, nil
+		}
+
 		r[d.routerName+".reload"] = r[d.routerName+".deploy"]
 
 		r[d.routerName+".stop"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 			var in map[string]interface{}
 			json.Unmarshal(input, &in)
 			id, _ := in[d.idField].(string)
-			if h.Queue != nil {
-				if _, err := h.Queue.EnqueueStopDatabase(id, d.routerName); err != nil {
-					return nil, err
-				}
+			if h.DBSvc != nil {
+				go h.DBSvc.StopDatabase(id, schema.DatabaseType(d.routerName))
 			}
 			return true, nil
 		}
@@ -155,10 +162,8 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry) {
 			var in map[string]interface{}
 			json.Unmarshal(input, &in)
 			id, _ := in[d.idField].(string)
-			if h.Queue != nil {
-				if _, err := h.Queue.EnqueueRebuildDatabase(id, d.routerName); err != nil {
-					return nil, err
-				}
+			if h.DBSvc != nil {
+				go h.DBSvc.RebuildDatabase(id, schema.DatabaseType(d.routerName))
 			}
 			return true, nil
 		}

@@ -129,14 +129,10 @@ func (h *Handler) DeployMySQL(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueDeployDatabase(id, "mysql")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued", "taskId": info.ID})
+	if h.DBSvc != nil {
+		go h.DBSvc.DeployMySQL(id, nil)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment started"})
 }
 
 func (h *Handler) StopMySQL(c echo.Context) error {
@@ -150,14 +146,10 @@ func (h *Handler) StopMySQL(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueStopDatabase(id, "mysql")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
+	if h.DBSvc != nil {
+		go h.DBSvc.StopDatabase(id, schema.DatabaseTypeMySQL)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Stop started"})
 }
 
 func (h *Handler) StartMySQL(c echo.Context) error {

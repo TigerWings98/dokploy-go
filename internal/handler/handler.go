@@ -34,6 +34,7 @@ type Handler struct {
 	PreviewSvc *service.PreviewService
 	ComposeSvc *service.ComposeService
 	AppSvc     *service.ApplicationService
+	DBSvc      *service.DatabaseService
 	Updater    *updater.Updater
 	CertsPath  string
 }
@@ -103,6 +104,11 @@ func WithComposeService(s *service.ComposeService) HandlerOption {
 // WithApplicationService sets the application service.
 func WithApplicationService(s *service.ApplicationService) HandlerOption {
 	return func(h *Handler) { h.AppSvc = s }
+}
+
+// WithDatabaseService sets the database service.
+func WithDatabaseService(s *service.DatabaseService) HandlerOption {
+	return func(h *Handler) { h.DBSvc = s }
 }
 
 // WithUpdater sets the updater.

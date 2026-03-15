@@ -5,11 +5,8 @@
 package handler
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
@@ -18,6 +15,7 @@ import (
 
 func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 	// Database deployWithLogs subscriptions (postgres/mysql/mariadb/mongo/redis)
+	// 与 TS 版对齐：直接调用 service 层，通过 onData 回调实时输出日志，不走队列
 	dbTypes := []struct {
 		name    string
 		idField string
@@ -41,18 +39,17 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 				return
 			}
 
-			emit <- fmt.Sprintf("Starting %s deployment...", dt.name)
-
-			// Enqueue the deployment
-			if h.Queue != nil {
-				if _, err := h.Queue.EnqueueDeployDatabase(id, dt.name); err != nil {
-					emit <- "Error: " + err.Error()
-					return
-				}
+			if h.DBSvc == nil {
+				emit <- "Error: database service not available"
+				return
 			}
 
-			// Tail the deployment log file
-			h.tailDeploymentLogs(c, id, dt.name, emit)
+			onData := func(msg string) { emit <- msg }
+			if err := h.DBSvc.DeployByType(id, dt.name, onData); err != nil {
+				emit <- fmt.Sprintf("\nDeploy %s: ❌\n", dt.name)
+			} else {
+				emit <- fmt.Sprintf("\nDeploy %s: ✅\n", dt.name)
+			}
 		}
 	}
 
@@ -187,52 +184,3 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 	}
 }
 
-// tailDeploymentLogs monitors for deployment logs and streams them.
-func (h *Handler) tailDeploymentLogs(c echo.Context, id, dbType string, emit chan<- interface{}) {
-	// Find the latest deployment for this database
-	logsPath := "/etc/dokploy/logs"
-	if h.Config != nil {
-		logsPath = h.Config.Paths.LogsPath
-	}
-	logDir := filepath.Join(logsPath, dbType)
-
-	// Look for deployment log file
-	logFile := filepath.Join(logDir, id+".log")
-
-	// Wait for log file to appear (max 30 seconds)
-	var f *os.File
-	for i := 0; i < 30; i++ {
-		select {
-		case <-c.Request().Context().Done():
-			return
-		default:
-		}
-		var err error
-		f, err = os.Open(logFile)
-		if err == nil {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	if f == nil {
-		// No log file found, just wait for deployment status
-		emit <- "Deployment queued, waiting for completion..."
-		time.Sleep(5 * time.Second)
-		emit <- "Deployment completed."
-		return
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		select {
-		case <-c.Request().Context().Done():
-			return
-		default:
-			emit <- scanner.Text()
-		}
-	}
-
-	emit <- "Deployment completed."
-}

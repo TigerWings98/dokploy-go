@@ -123,14 +123,10 @@ func (h *Handler) DeployRedis(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueDeployDatabase(id, "redis")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued", "taskId": info.ID})
+	if h.DBSvc != nil {
+		go h.DBSvc.DeployRedis(id, nil)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Deployment started"})
 }
 
 func (h *Handler) StopRedis(c echo.Context) error {
@@ -144,14 +140,10 @@ func (h *Handler) StopRedis(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueStopDatabase(id, "redis")
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued", "taskId": info.ID})
+	if h.DBSvc != nil {
+		go h.DBSvc.StopDatabase(id, schema.DatabaseTypeRedis)
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Stop queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Stop started"})
 }
 
 func (h *Handler) StartRedis(c echo.Context) error {

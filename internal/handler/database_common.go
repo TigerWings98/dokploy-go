@@ -63,21 +63,20 @@ func (h *Handler) lookupDB(dbType, id string) (*dbInfo, error) {
 func (h *Handler) dbStart(c echo.Context, dbType, idParam, idColumn string) error {
 	id := c.Param(idParam)
 
-	info, err := h.lookupDB(dbType, id)
-	if err != nil {
+	if _, err := h.lookupDB(dbType, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("%s not found", dbType))
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Docker != nil {
-		if err := h.Docker.ScaleService(context.Background(), info.appName, 1); err != nil {
+	// 与 TS 版对齐：通过 service 层启动（支持远程服务器）
+	if h.DBSvc != nil {
+		if err := h.DBSvc.StartDatabase(id, schema.DatabaseType(dbType)); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 	}
 
-	h.updateDBStatus(dbType, idColumn, id, schema.ApplicationStatusDone)
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("%s started", dbType)})
 }
 
@@ -111,14 +110,11 @@ func (h *Handler) dbRebuild(c echo.Context, dbType, idParam string) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if h.Queue != nil {
-		info, err := h.Queue.EnqueueRebuildDatabase(id, dbType)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(http.StatusOK, map[string]string{"message": "Rebuild queued", "taskId": info.ID})
+	// 与 TS 版对齐：内联执行，不走队列
+	if h.DBSvc != nil {
+		go h.DBSvc.RebuildDatabase(id, schema.DatabaseType(dbType))
 	}
-	return c.JSON(http.StatusOK, map[string]string{"message": "Rebuild queued"})
+	return c.JSON(http.StatusOK, map[string]string{"message": "Rebuild started"})
 }
 
 type ChangeStatusRequest struct {

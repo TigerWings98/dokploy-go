@@ -33,6 +33,7 @@ import (
 )
 
 func main() {
+	log.Printf("dokploy-go starting, build: 20250316-1")
 	cfg := config.Load()
 
 	database, err := db.Connect(cfg.DatabaseURL)
@@ -117,14 +118,6 @@ func main() {
 				log.Printf("Rebuild compose: %s", payload.ComposeID)
 				return composeSvc.Rebuild(payload.ComposeID, payload.Title)
 			},
-			HandleDeployDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
-				log.Printf("Deploy database: %s (%s)", payload.DatabaseID, payload.Type)
-				return deployDatabaseByType(dbSvc, payload.DatabaseID, payload.Type)
-			},
-			HandleRebuildDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
-				log.Printf("Rebuild database: %s (%s)", payload.DatabaseID, payload.Type)
-				return dbSvc.RebuildDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
-			},
 			HandleStopCompose: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 				log.Printf("Stop compose: %s", payload.ID)
 				return composeSvc.Stop(payload.ID)
@@ -132,10 +125,6 @@ func main() {
 			HandleStopApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 				log.Printf("Stop application: %s", payload.ID)
 				return appSvc.Stop(payload.ID)
-			},
-			HandleStopDatabase: func(ctx context.Context, payload queue.DeployDatabasePayload) error {
-				log.Printf("Stop database: %s (%s)", payload.DatabaseID, payload.Type)
-				return dbSvc.StopDatabase(payload.DatabaseID, schema.DatabaseType(payload.Type))
 			},
 			HandleStartApplication: func(ctx context.Context, payload queue.SimpleIDPayload) error {
 				log.Printf("Start application: %s", payload.ID)
@@ -208,6 +197,7 @@ func main() {
 		handler.WithPreviewService(previewSvc),
 		handler.WithComposeService(composeSvc),
 		handler.WithApplicationService(appSvc),
+		handler.WithDatabaseService(dbSvc),
 		handler.WithUpdater(upd),
 	)
 	h.RegisterRoutes(e)
@@ -215,6 +205,7 @@ func main() {
 	// Register WebSocket routes
 	wsHandler := ws.NewHandler(database, dockerClient, a, cfg.Paths.MonitoringPath)
 	wsHandler.BackupSvc = backupSvc
+	wsHandler.DBSvc = dbSvc
 	wsHandler.RegisterRoutes(e)
 
 	// Register frontend routes (must be last - catches all unmatched routes)
@@ -253,19 +244,3 @@ func main() {
 	log.Println("Server stopped")
 }
 
-func deployDatabaseByType(dbSvc *service.DatabaseService, id, dbType string) error {
-	switch dbType {
-	case "postgres":
-		return dbSvc.DeployPostgres(id)
-	case "mysql":
-		return dbSvc.DeployMySQL(id)
-	case "mariadb":
-		return dbSvc.DeployMariaDB(id)
-	case "mongo":
-		return dbSvc.DeployMongo(id)
-	case "redis":
-		return dbSvc.DeployRedis(id)
-	default:
-		return nil
-	}
-}

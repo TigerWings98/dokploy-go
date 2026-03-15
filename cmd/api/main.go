@@ -11,7 +11,9 @@ import (
 
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
+	"github.com/dokploy/dokploy/internal/docker"
 	"github.com/dokploy/dokploy/internal/queue"
+	"github.com/dokploy/dokploy/internal/service"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -32,6 +34,10 @@ func main() {
 
 	q := queue.NewQueue(redisAddr)
 	defer q.Close()
+
+	// 初始化 Docker 和 DatabaseService（数据库部署已内联执行，不走队列）
+	dockerClient, _ := docker.NewClient()
+	dbSvc := service.NewDatabaseService(database, dockerClient, cfg)
 
 	apiKey := os.Getenv("API_KEY")
 
@@ -103,7 +109,7 @@ func main() {
 		})
 	})
 
-	// Deploy database
+	// Deploy database（与 TS 版对齐：内联执行，不走队列）
 	api.POST("/deploy/database", func(c echo.Context) error {
 		var req struct {
 			DatabaseID string `json:"databaseId"`
@@ -113,14 +119,10 @@ func main() {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
-		info, err := q.EnqueueDeployDatabase(req.DatabaseID, req.Type)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
+		go dbSvc.DeployByType(req.DatabaseID, req.Type, nil)
 
 		return c.JSON(http.StatusOK, map[string]string{
-			"taskId":  info.ID,
-			"message": "Deployment queued",
+			"message": "Deployment started",
 		})
 	})
 

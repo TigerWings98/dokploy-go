@@ -472,3 +472,8 @@ func nsToDuration(ns int64) string {
 	d := time.Duration(ns)
 	return d.String()
 }
+
+// shellEscapeSingleQuote 转义单引号，用于 shell 命令中的值
+func shellEscapeSingleQuote(s string) string {
+	return strings.ReplaceAll(s, "'", "'\\''")
+}

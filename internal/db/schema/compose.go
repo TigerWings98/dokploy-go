@@ -24,9 +24,9 @@ type Compose struct {
 	RefreshToken  *string           `gorm:"column:refreshToken;type:text" json:"refreshToken"`
 	ComposeStatus ApplicationStatus `gorm:"column:composeStatus;type:text;not null;default:'idle'" json:"composeStatus"`
 	ComposePath   string            `gorm:"column:composePath;type:text;not null;default:'./docker-compose.yml'" json:"composePath"`
-	Command       *string           `gorm:"column:command;type:text" json:"command"`
+	Command       string            `gorm:"column:command;type:text;not null;default:''" json:"command"`
 	AutoDeploy    *bool             `gorm:"column:autoDeploy" json:"autoDeploy"`
-	RandomizeCompose *bool          `gorm:"column:randomize" json:"randomize"`
+	RandomizeCompose bool            `gorm:"column:randomize;not null;default:false" json:"randomize"`
 	CreatedAt     string            `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	EnvironmentID string            `gorm:"column:environmentId;type:text;not null" json:"environmentId"`
 	ServerID      *string           `gorm:"column:serverId;type:text" json:"serverId"`

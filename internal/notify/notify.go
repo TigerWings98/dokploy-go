@@ -126,19 +126,19 @@ func (n *Notifier) sendToChannelSync(notif *schema.Notification, payload Notific
 func shouldSend(notif *schema.Notification, event EventType) bool {
 	switch event {
 	case EventAppDeploy:
-		return notif.AppDeploy != nil && *notif.AppDeploy
+		return notif.AppDeploy
 	case EventAppBuildError:
-		return notif.AppBuildError != nil && *notif.AppBuildError
+		return notif.AppBuildError
 	case EventDatabaseBackup:
-		return notif.DatabaseBackup != nil && *notif.DatabaseBackup
+		return notif.DatabaseBackup
 	case EventDokployRestart:
-		return notif.DokployRestart != nil && *notif.DokployRestart
+		return notif.DokployRestart
 	case EventDockerCleanup:
-		return notif.DockerCleanup != nil && *notif.DockerCleanup
+		return notif.DockerCleanup
 	case EventServerThreshold:
-		return notif.ServerThreshold != nil && *notif.ServerThreshold
+		return notif.ServerThreshold
 	case EventVolumeBackup:
-		return notif.VolumeBackup != nil && *notif.VolumeBackup
+		return notif.VolumeBackup
 	}
 	return false
 }

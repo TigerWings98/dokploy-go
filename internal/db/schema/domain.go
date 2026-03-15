@@ -15,7 +15,7 @@ type Domain struct {
 	DomainID          string          `gorm:"column:domainId;primaryKey;type:text" json:"domainId"`
 	Host              string          `gorm:"column:host;type:text;not null" json:"host"`
 	HTTPS             bool            `gorm:"column:https;not null;default:false" json:"https"`
-	Port              *int            `gorm:"column:port;default:80" json:"port"`
+	Port              *int            `gorm:"column:port;default:3000" json:"port"`
 	Path              *string         `gorm:"column:path;type:text;default:'/'" json:"path"`
 	UniqueConfigKey   *int            `gorm:"column:uniqueConfigKey" json:"uniqueConfigKey"`
 	CertificateType   CertificateType `gorm:"column:certificateType;type:text;not null;default:'none'" json:"certificateType"`

@@ -21,14 +21,14 @@ type Notification struct {
 	CreatedAt        string           `gorm:"column:createdAt;type:text;not null" json:"createdAt"`
 	OrganizationID   string           `gorm:"column:organizationId;type:text;not null" json:"organizationId"`
 
-	// 事件开关 (default false)
-	AppDeploy       *bool `gorm:"column:appDeploy;default:false" json:"appDeploy"`
-	AppBuildError   *bool `gorm:"column:appBuildError;default:false" json:"appBuildError"`
-	DatabaseBackup  *bool `gorm:"column:databaseBackup;default:false" json:"databaseBackup"`
-	DokployRestart  *bool `gorm:"column:dokployRestart;default:false" json:"dokployRestart"`
-	DockerCleanup   *bool `gorm:"column:dockerCleanup;default:false" json:"dockerCleanup"`
-	ServerThreshold *bool `gorm:"column:serverThreshold;default:false" json:"serverThreshold"`
-	VolumeBackup    *bool `gorm:"column:volumeBackup;default:false" json:"volumeBackup"`
+	// 事件开关 (not null, default false, 与 TS 版 .notNull().default(false) 对齐)
+	AppDeploy       bool `gorm:"column:appDeploy;not null;default:false" json:"appDeploy"`
+	AppBuildError   bool `gorm:"column:appBuildError;not null;default:false" json:"appBuildError"`
+	DatabaseBackup  bool `gorm:"column:databaseBackup;not null;default:false" json:"databaseBackup"`
+	DokployRestart  bool `gorm:"column:dokployRestart;not null;default:false" json:"dokployRestart"`
+	DockerCleanup   bool `gorm:"column:dockerCleanup;not null;default:false" json:"dockerCleanup"`
+	ServerThreshold bool `gorm:"column:serverThreshold;not null;default:false" json:"serverThreshold"`
+	VolumeBackup    bool `gorm:"column:volumeBackup;not null;default:false" json:"volumeBackup"`
 
 	// FK 引用 11 个子表 (nullable, CASCADE delete)
 	SlackID    *string `gorm:"column:slackId;type:text" json:"slackId"`

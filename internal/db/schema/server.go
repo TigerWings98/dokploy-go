@@ -29,7 +29,7 @@ type Server struct {
 	ServerType          ServerType   `gorm:"column:serverType;type:text;not null;default:'deploy'" json:"serverType"`
 	Command             string       `gorm:"column:command;type:text;not null;default:''" json:"command"`
 	SSHKeyID            *string      `gorm:"column:sshKeyId;type:text" json:"sshKeyId"`
-	MetricsConfig       *MetricsConfigJSON `gorm:"column:metricsConfig;type:jsonb" json:"metricsConfig"`
+	MetricsConfig       MetricsConfigJSON `gorm:"column:metricsConfig;type:jsonb;not null" json:"metricsConfig"`
 
 	// Relations
 	Organization *Organization `gorm:"foreignKey:OrganizationID;references:ID" json:"organization,omitempty"`
@@ -50,7 +50,37 @@ func (s *Server) BeforeCreate(tx *gorm.DB) error {
 	if s.CreatedAt == "" {
 		s.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
+	// 与 TS 版 .notNull().default({...}) 对齐：创建时如果未设置 metricsConfig，填充默认值
+	if s.MetricsConfig.Server.Type == "" {
+		s.MetricsConfig = MetricsConfigJSON(DefaultMetricsConfig())
+	}
 	return nil
+}
+
+// DefaultMetricsConfig 返回与 TS 版默认 metricsConfig 完全一致的配置
+func DefaultMetricsConfig() MetricsConfig {
+	return MetricsConfig{
+		Server: MetricsServerConfig{
+			Type:          "Remote",
+			RefreshRate:   60,
+			Port:          4500,
+			Token:         "",
+			URLCallback:   "",
+			CronJob:       "",
+			RetentionDays: 2,
+			Thresholds: MetricsThresholdsConfig{
+				CPU:    0,
+				Memory: 0,
+			},
+		},
+		Containers: MetricsContainersConfig{
+			RefreshRate: 60,
+			Services: MetricsServicesFilterConfig{
+				Include: []string{},
+				Exclude: []string{},
+			},
+		},
+	}
 }
 
 // MetricsConfig represents the server metrics configuration.

@@ -400,7 +400,7 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 		}
 	} else {
 		// 非隔离：先 randomize suffix，再注入 dokploy-network
-		if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" {
+		if compose.RandomizeCompose && compose.ComposeSuffix != "" {
 			if transformed, err := composepkg.AddSuffixToAll(composeContent, compose.ComposeSuffix); err == nil {
 				composeContent = transformed
 			}
@@ -416,8 +416,8 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 
 	// 生成 docker 命令（与 TS 版 createCommand 一致）
 	var dockerCmd string
-	if compose.Command != nil && *compose.Command != "" {
-		dockerCmd = *compose.Command
+	if compose.Command != "" {
+		dockerCmd = compose.Command
 	} else {
 		switch compose.ComposeType {
 		case schema.ComposeTypeStack:
@@ -436,7 +436,7 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 	if !strings.Contains(envContent, "DOCKER_CONFIG") {
 		envContent += "DOCKER_CONFIG=/root/.docker\n"
 	}
-	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" {
+	if compose.RandomizeCompose && compose.ComposeSuffix != "" {
 		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", compose.ComposeSuffix)
 	}
 	var projectEnv, environmentEnv string
@@ -540,7 +540,7 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 
 	// 应用 randomize 后缀转换（与 TS 版 randomizeSpecificationFile 一致）
 	// 非隔离模式下，randomize=true 时给 services/volumes/networks/configs/secrets 加后缀
-	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" && !compose.IsolatedDeployment {
+	if compose.RandomizeCompose && compose.ComposeSuffix != "" && !compose.IsolatedDeployment {
 		s.applySuffixToComposeFile(compose, composeDir, composePth, compose.ComposeSuffix, writeLog)
 	}
 
@@ -562,9 +562,9 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 
 	// 生成 docker 命令（与 TS 版 createCommand 一致）
 	var cmd string
-	if compose.Command != nil && *compose.Command != "" {
+	if compose.Command != "" {
 		// 用户自定义命令
-		cmd = fmt.Sprintf("docker %s", *compose.Command)
+		cmd = fmt.Sprintf("docker %s", compose.Command)
 	} else {
 		switch compose.ComposeType {
 		case schema.ComposeTypeStack:
@@ -780,7 +780,7 @@ func (s *ComposeService) createEnvFile(compose *schema.Compose, composeDir strin
 	if !strings.Contains(envContent, "DOCKER_CONFIG") {
 		envContent += "DOCKER_CONFIG=/root/.docker\n"
 	}
-	if compose.RandomizeCompose != nil && *compose.RandomizeCompose && compose.ComposeSuffix != "" {
+	if compose.RandomizeCompose && compose.ComposeSuffix != "" {
 		envContent += fmt.Sprintf("COMPOSE_PREFIX=%s\n", compose.ComposeSuffix)
 	}
 

@@ -128,11 +128,15 @@ func (s *Service) RestoreBackup(databaseID string, destinationID string, databas
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
 		if _, err := process.ExecAsyncRemote(conn, fullCmd, nil); err != nil {
-			return fmt.Errorf("failed to restore database: %w", err)
+			restoreErr := extractExecError("failed to restore database", err)
+			emit(fmt.Sprintf("Error: %s", restoreErr.Error()))
+			return restoreErr
 		}
 	} else {
 		if _, err := process.ExecAsync(fullCmd); err != nil {
-			return fmt.Errorf("failed to restore database: %w", err)
+			restoreErr := extractExecError("failed to restore database", err)
+			emit(fmt.Sprintf("Error: %s", restoreErr.Error()))
+			return restoreErr
 		}
 	}
 
@@ -273,11 +277,15 @@ func (s *Service) RestoreComposeBackup(composeID string, destinationID string, d
 			PrivateKey: compose.Server.SSHKey.PrivateKey,
 		}
 		if _, err := process.ExecAsyncRemote(conn, fullCmd, nil); err != nil {
-			return fmt.Errorf("failed to restore compose backup: %w", err)
+			restoreErr := extractExecError("failed to restore compose backup", err)
+			emit(fmt.Sprintf("Error: %s", restoreErr.Error()))
+			return restoreErr
 		}
 	} else {
 		if _, err := process.ExecAsync(fullCmd); err != nil {
-			return fmt.Errorf("failed to restore compose backup: %w", err)
+			restoreErr := extractExecError("failed to restore compose backup", err)
+			emit(fmt.Sprintf("Error: %s", restoreErr.Error()))
+			return restoreErr
 		}
 	}
 

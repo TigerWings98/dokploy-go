@@ -78,6 +78,8 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 			return nil, &trpcErr{"Destination not found", "NOT_FOUND", 404}
 		}
 		h.DB.Model(&dest).Updates(in)
+		// 重新查询返回更新后的数据（避免返回旧值导致前端下次保存覆盖）
+		h.DB.First(&dest, "\"destinationId\" = ?", id)
 		return dest, nil
 	}
 

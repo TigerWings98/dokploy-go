@@ -520,6 +520,28 @@ func (s *Service) RestoreWebServerBackup(destinationID string, backupFile string
 	emit("Cleaning up container temp file...")
 	process.ExecAsync(fmt.Sprintf(`docker exec %s rm /tmp/database.sql`, postgresContainerID))
 
+	// ★ 重置所有服务状态为 idle（restore 后所有服务都未运行，状态必须回到初始值）
+	emit("Resetting all service statuses to idle...")
+	resetStatuses := []string{
+		`UPDATE application SET "applicationStatus" = 'idle'`,
+		`UPDATE compose SET "composeStatus" = 'idle'`,
+		`UPDATE postgres SET "applicationStatus" = 'idle'`,
+		`UPDATE mysql SET "applicationStatus" = 'idle'`,
+		`UPDATE mariadb SET "applicationStatus" = 'idle'`,
+		`UPDATE mongo SET "applicationStatus" = 'idle'`,
+		`UPDATE redis SET "applicationStatus" = 'idle'`,
+	}
+	for _, sql := range resetStatuses {
+		resetCmd := fmt.Sprintf(
+			`docker exec %s psql -U dokploy -d dokploy -c "%s"`,
+			postgresContainerID, sql,
+		)
+		if _, err := process.ExecAsync(resetCmd); err != nil {
+			emit(fmt.Sprintf("Warning: failed to reset status: %v", err))
+		}
+	}
+	emit("All service statuses reset to idle.")
+
 	emit("Restore completed successfully!")
 	return nil
 }

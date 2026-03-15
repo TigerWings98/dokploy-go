@@ -457,7 +457,7 @@ func (s *Service) RunBackup(backupID string) error {
 	// 组装完整备份流水线命令（与 TS 版 getBackupCommand 完全一致，含分步日志）
 	var fullCmd string
 	if logPath != "" {
-		fullCmd = fmt.Sprintf(`set -eo pipefail;
+		fullCmd = fmt.Sprintf(`set -e;
 echo "[$(date)] Starting backup process..." >> %s;
 echo "[$(date)] Executing backup command..." >> %s;
 CONTAINER_ID=$(%s)
@@ -491,7 +491,7 @@ echo "Backup done" >> %s;`,
 		)
 	} else {
 		// 降级：无日志路径时使用简单命令
-		fullCmd = fmt.Sprintf(`set -eo pipefail; CONTAINER_ID=$(%s); if [ -z "$CONTAINER_ID" ]; then echo "Error: Container not found"; exit 1; fi; %s | %s`,
+		fullCmd = fmt.Sprintf(`set -e; CONTAINER_ID=$(%s); if [ -z "$CONTAINER_ID" ]; then echo "Error: Container not found"; exit 1; fi; %s | %s`,
 			containerSearch, dumpCommand, rcloneCommand,
 		)
 	}

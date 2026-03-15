@@ -136,11 +136,14 @@ func (h *Handler) ManualBackup(c echo.Context) error {
 }
 
 type RestoreBackupRequest struct {
-	Filename string `json:"filename" validate:"required"`
+	Filename      string `json:"filename" validate:"required"`
+	DestinationID string `json:"destinationId" validate:"required"`
+	DatabaseType  string `json:"databaseType" validate:"required"`
+	DatabaseName  string `json:"databaseName" validate:"required"`
 }
 
 func (h *Handler) RestoreBackup(c echo.Context) error {
-	id := c.Param("backupId")
+	id := c.Param("backupId") // 这里 id 实际是 databaseId
 
 	var req RestoreBackupRequest
 	if err := c.Bind(&req); err != nil {
@@ -153,8 +156,8 @@ func (h *Handler) RestoreBackup(c echo.Context) error {
 
 	// Run restore in background
 	go func() {
-		if err := h.BackupSvc.RestoreBackup(id, req.Filename); err != nil {
-			// Error is logged inside RestoreBackup
+		noop := func(string) {}
+		if err := h.BackupSvc.RestoreBackup(id, req.DestinationID, req.DatabaseType, req.DatabaseName, req.Filename, noop); err != nil {
 			_ = err
 		}
 	}()

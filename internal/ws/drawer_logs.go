@@ -794,7 +794,7 @@ func (h *Handler) handleBackupRestore(input json.RawMessage, emit func(string) b
 		}
 	} else {
 		// 数据库恢复（postgres/mysql/mariadb/mongo）
-		if err := h.BackupSvc.RestoreBackup(in.DatabaseID, in.BackupFile); err != nil {
+		if err := h.BackupSvc.RestoreBackup(in.DatabaseID, in.DestinationID, in.DatabaseType, in.DatabaseName, in.BackupFile, emitFn); err != nil {
 			emit(fmt.Sprintf("Error: %s\n", err.Error()))
 			return
 		}

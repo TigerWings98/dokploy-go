@@ -147,19 +147,11 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 			}
 		} else {
 			// 数据库恢复（postgres/mysql/mariadb/mongo）
-			backupID := in.BackupID
-			fileName := in.FileName
-			if backupID == "" {
-				backupID = in.DatabaseID
-			}
-			if fileName == "" {
-				fileName = in.BackupFile
-			}
-			if err := h.BackupSvc.RestoreBackup(backupID, fileName); err != nil {
+			// 与 TS 版一致：通过 databaseId 查数据库实例表，不依赖 backup 表
+			if err := h.BackupSvc.RestoreBackup(in.DatabaseID, in.DestinationID, in.DatabaseType, in.DatabaseName, in.BackupFile, emitFn); err != nil {
 				emit <- "Error: " + err.Error()
 				return
 			}
-			emit <- "Backup restored successfully!"
 		}
 	}
 

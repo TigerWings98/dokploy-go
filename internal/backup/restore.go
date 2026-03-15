@@ -15,93 +15,85 @@ import (
 	"github.com/dokploy/dokploy/internal/process"
 )
 
-// RestoreBackup downloads a backup from S3 and restores it to the database.
-func (s *Service) RestoreBackup(backupID string, filename string) error {
-	var backup schema.Backup
-	if err := s.db.
-		Preload("Destination").
-		Preload("Compose").
-		Preload("Postgres").
-		Preload("Postgres.Server").
-		Preload("Postgres.Server.SSHKey").
-		Preload("MySQL").
-		Preload("MySQL.Server").
-		Preload("MySQL.Server.SSHKey").
-		Preload("MariaDB").
-		Preload("MariaDB.Server").
-		Preload("MariaDB.Server.SSHKey").
-		Preload("Mongo").
-		Preload("Mongo.Server").
-		Preload("Mongo.Server.SSHKey").
-		First(&backup, "\"backupId\" = ?", backupID).Error; err != nil {
-		return fmt.Errorf("backup not found: %w", err)
+// RestoreBackup 恢复数据库备份。
+// 与 TS 版 restoreBackupWithLogs 完全一致：直接通过 databaseId 查数据库实例表拿凭据和 appName，
+// 通过 destinationId 查 S3 配置，不依赖 backup 表。
+func (s *Service) RestoreBackup(databaseID string, destinationID string, databaseType string, databaseName string, backupFile string, emit func(string)) error {
+	// 查 S3 目的地
+	var dest schema.Destination
+	if err := s.db.First(&dest, "\"destinationId\" = ?", destinationID).Error; err != nil {
+		return fmt.Errorf("destination not found: %w", err)
 	}
 
-	if backup.Destination == nil {
-		return fmt.Errorf("backup destination not configured")
-	}
+	rcloneFlags := getRcloneFlags(&dest)
+	bucketPath := fmt.Sprintf(":s3:%s", dest.Bucket)
+	backupPath := fmt.Sprintf("%s/%s", bucketPath, backupFile)
 
-	dest := backup.Destination
-	rcloneFlags := getRcloneFlags(dest)
-	appName := getServiceAppName(&backup)
-	prefix := normalizeS3Path(backup.Prefix)
-	s3Path := fmt.Sprintf(":s3:%s/%s/%s%s", dest.Bucket, appName, prefix, filename)
-
-	// 构建容器查找 + 恢复命令（与 TS 版 getRestoreCommand 完全一致）
+	// 根据 databaseType 查对应的数据库实例，获取 appName、凭据、serverID
 	var containerSearch string
 	var restoreCommand string
 	var serverID *string
 	var server *schema.Server
 	isMongo := false
 
-	switch backup.DatabaseType {
-	case schema.DatabaseTypePostgres:
-		if backup.Postgres == nil {
-			return fmt.Errorf("postgres instance not found")
+	switch databaseType {
+	case "postgres":
+		var pg schema.Postgres
+		if err := s.db.Preload("Server").Preload("Server.SSHKey").First(&pg, "\"postgresId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("postgres instance not found: %w", err)
 		}
-		containerSearch = getServiceContainerCommand(backup.Postgres.AppName)
+		containerSearch = getServiceContainerCommand(pg.AppName)
 		restoreCommand = fmt.Sprintf(
 			`docker exec -i $CONTAINER_ID sh -c "pg_restore -U '%s' -d %s -O --clean --if-exists"`,
-			backup.Postgres.DatabaseUser, backup.Database,
+			pg.DatabaseUser, databaseName,
 		)
-		serverID = backup.Postgres.ServerID
-		server = backup.Postgres.Server
-	case schema.DatabaseTypeMySQL:
-		if backup.MySQL == nil {
-			return fmt.Errorf("mysql instance not found")
+		serverID = pg.ServerID
+		server = pg.Server
+	case "mysql":
+		var my schema.MySQL
+		if err := s.db.Preload("Server").Preload("Server.SSHKey").First(&my, "\"mysqlId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("mysql instance not found: %w", err)
 		}
-		containerSearch = getServiceContainerCommand(backup.MySQL.AppName)
+		containerSearch = getServiceContainerCommand(my.AppName)
 		restoreCommand = fmt.Sprintf(
 			`docker exec -i $CONTAINER_ID sh -c "mysql -u root -p'%s' %s"`,
-			backup.MySQL.DatabaseRootPassword, backup.Database,
+			my.DatabaseRootPassword, databaseName,
 		)
-		serverID = backup.MySQL.ServerID
-		server = backup.MySQL.Server
-	case schema.DatabaseTypeMariaDB:
-		if backup.MariaDB == nil {
-			return fmt.Errorf("mariadb instance not found")
+		serverID = my.ServerID
+		server = my.Server
+	case "mariadb":
+		var mdb schema.MariaDB
+		if err := s.db.Preload("Server").Preload("Server.SSHKey").First(&mdb, "\"mariadbId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("mariadb instance not found: %w", err)
 		}
-		containerSearch = getServiceContainerCommand(backup.MariaDB.AppName)
+		containerSearch = getServiceContainerCommand(mdb.AppName)
 		restoreCommand = fmt.Sprintf(
 			`docker exec -i $CONTAINER_ID sh -c "mariadb -u '%s' -p'%s' %s"`,
-			backup.MariaDB.DatabaseUser, backup.MariaDB.DatabasePassword, backup.Database,
+			mdb.DatabaseUser, mdb.DatabasePassword, databaseName,
 		)
-		serverID = backup.MariaDB.ServerID
-		server = backup.MariaDB.Server
-	case schema.DatabaseTypeMongo:
-		if backup.Mongo == nil {
-			return fmt.Errorf("mongo instance not found")
+		serverID = mdb.ServerID
+		server = mdb.Server
+	case "mongo":
+		var mg schema.Mongo
+		if err := s.db.Preload("Server").Preload("Server.SSHKey").First(&mg, "\"mongoId\" = ?", databaseID).Error; err != nil {
+			return fmt.Errorf("mongo instance not found: %w", err)
 		}
-		containerSearch = getServiceContainerCommand(backup.Mongo.AppName)
+		containerSearch = getServiceContainerCommand(mg.AppName)
 		restoreCommand = fmt.Sprintf(
 			`docker exec -i $CONTAINER_ID sh -c "mongorestore --username '%s' --password '%s' --authenticationDatabase admin --db %s --archive --drop"`,
-			backup.Mongo.DatabaseUser, backup.Mongo.DatabasePassword, backup.Database,
+			mg.DatabaseUser, mg.DatabasePassword, databaseName,
 		)
-		serverID = backup.Mongo.ServerID
-		server = backup.Mongo.Server
+		serverID = mg.ServerID
+		server = mg.Server
 		isMongo = true
 	default:
-		return fmt.Errorf("unsupported database type for restore: %s", backup.DatabaseType)
+		return fmt.Errorf("unsupported database type for restore: %s", databaseType)
+	}
+
+	// 构建 rclone 命令
+	rcloneCommand := fmt.Sprintf(`rclone cat %s "%s"`, rcloneFlags, backupPath)
+	if isMongo {
+		rcloneCommand = fmt.Sprintf(`rclone copy %s "%s"`, rcloneFlags, backupPath)
 	}
 
 	// 组装完整恢复命令
@@ -109,21 +101,23 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 	if isMongo {
 		// MongoDB 特殊处理：先下载到临时目录，解压后恢复（与 TS 版 getMongoSpecificCommand 一致）
 		tempDir := "/tmp/dokploy-restore"
-		baseName := filepath.Base(filename)
+		baseName := filepath.Base(backupFile)
 		decompressedName := strings.TrimSuffix(baseName, ".gz")
-		rcloneDownload := fmt.Sprintf("rclone copy %s \"%s\" %s", rcloneFlags, s3Path, tempDir)
 		fullCmd = fmt.Sprintf(
-			`CONTAINER_ID=$(%s) && rm -rf %s && mkdir -p %s && %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
-			containerSearch, tempDir, tempDir, rcloneDownload, tempDir, baseName, restoreCommand, decompressedName, tempDir,
+			`CONTAINER_ID=$(%s) && rm -rf %s && mkdir -p %s && %s %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
+			containerSearch, tempDir, tempDir, rcloneCommand, tempDir, tempDir, baseName, restoreCommand, decompressedName, tempDir,
 		)
 	} else {
 		// 其他数据库：rclone cat → gunzip → 恢复命令（流式管道）
-		rcloneDownload := fmt.Sprintf("rclone cat %s \"%s\"", rcloneFlags, s3Path)
 		fullCmd = fmt.Sprintf(
 			`CONTAINER_ID=$(%s) && %s | gunzip | %s`,
-			containerSearch, rcloneDownload, restoreCommand,
+			containerSearch, rcloneCommand, restoreCommand,
 		)
 	}
+
+	emit("Starting restore...")
+	emit(fmt.Sprintf("Backup path: %s", backupPath))
+	emit(fmt.Sprintf("Executing command: %s", fullCmd))
 
 	// 执行（本地或远程 SSH）
 	if serverID != nil && server != nil && server.SSHKey != nil {
@@ -142,6 +136,7 @@ func (s *Service) RestoreBackup(backupID string, filename string) error {
 		}
 	}
 
+	emit("Restore completed successfully!")
 	return nil
 }
 

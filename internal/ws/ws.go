@@ -36,7 +36,7 @@ var upgrader = websocket.Upgrader{
 
 // BackupRestorer 定义 backup restore 所需的方法接口
 type BackupRestorer interface {
-	RestoreBackup(backupID string, filename string) error
+	RestoreBackup(databaseID string, destinationID string, databaseType string, databaseName string, backupFile string, emit func(string)) error
 	RestoreComposeBackup(composeID string, destinationID string, databaseType string, databaseName string, backupFile string, metadataJSON string, emit func(string)) error
 	RestoreWebServerBackup(destinationID string, backupFile string, emit func(string)) error
 }

@@ -5,13 +5,18 @@
 package handler
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/dokploy/dokploy/internal/auth"
 	"github.com/dokploy/dokploy/internal/backup"
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
+	"github.com/dokploy/dokploy/internal/db/schema"
 	"github.com/dokploy/dokploy/internal/docker"
 	mw "github.com/dokploy/dokploy/internal/middleware"
 	"github.com/dokploy/dokploy/internal/notify"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/dokploy/dokploy/internal/queue"
 	"github.com/dokploy/dokploy/internal/scheduler"
 	"github.com/dokploy/dokploy/internal/service"
@@ -242,4 +247,46 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 func (h *Handler) HealthCheck(c echo.Context) error {
 	return c.JSON(200, map[string]string{"status": "ok"})
+}
+
+// shEscape 安全转义 shell 参数（与 TS 版 shEscape 一致）
+func shEscape(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// safeDockerLoginCommand 生成安全的 docker login 命令（与 TS 版 safeDockerLoginCommand 一致）
+func safeDockerLoginCommand(registryURL, username, password string) string {
+	return fmt.Sprintf("printf %%s %s | docker login %s -u %s --password-stdin",
+		shEscape(password), shEscape(registryURL), shEscape(username))
+}
+
+// dockerLogin 在本地或远程服务器上执行 docker login（与 TS 版一致：持久化凭据到 ~/.docker/config.json）
+func (h *Handler) dockerLogin(registryURL, username, password string, serverID *string) error {
+	loginCmd := safeDockerLoginCommand(registryURL, username, password)
+
+	if serverID != nil && *serverID != "" && *serverID != "none" {
+		// 远程服务器：通过 SSH 执行 docker login
+		var server schema.Server
+		if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", *serverID).Error; err != nil {
+			return fmt.Errorf("server not found: %w", err)
+		}
+		if server.SSHKey == nil {
+			return fmt.Errorf("no SSH key available for server %s", server.Name)
+		}
+		conn := process.SSHConnection{
+			Host:       server.IPAddress,
+			Port:       server.Port,
+			Username:   server.Username,
+			PrivateKey: server.SSHKey.PrivateKey,
+		}
+		_, err := process.ExecAsyncRemote(conn, loginCmd, nil)
+		return err
+	}
+
+	// 本地：直接执行 docker login
+	_, err := process.ExecAsync(loginCmd)
+	return err
 }

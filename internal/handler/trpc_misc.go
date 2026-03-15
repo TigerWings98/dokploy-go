@@ -7,12 +7,14 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"strings"
 
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/process"
 	"github.com/labstack/echo/v4"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 )
@@ -590,22 +592,42 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		if err != nil {
 			return nil, err
 		}
-		var reg schema.Registry
-		json.Unmarshal(input, &reg)
-		reg.OrganizationID = member.OrganizationID
-		if err := h.DB.Create(&reg).Error; err != nil {
+		var in struct {
+			schema.Registry
+			ServerID *string `json:"serverId"`
+		}
+		json.Unmarshal(input, &in)
+		in.Registry.OrganizationID = member.OrganizationID
+		if err := h.DB.Create(&in.Registry).Error; err != nil {
 			return nil, err
 		}
-		return reg, nil
+		// 与 TS 版一致：创建后执行 docker login 持久化凭据
+		if err := h.dockerLogin(in.Registry.RegistryURL, in.Registry.Username, in.Registry.Password, in.ServerID); err != nil {
+			log.Printf("Warning: docker login failed after registry create: %v", err)
+		}
+		return in.Registry, nil
 	}
 
 	r["registry.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["registryId"].(string)
+		serverID, _ := in["serverId"].(string)
 		delete(in, "registryId")
+		delete(in, "serverId")
 		in = h.filterColumns(&schema.Registry{}, in)
 		h.DB.Model(&schema.Registry{}).Where("\"registryId\" = ?", id).Updates(in)
+		// 与 TS 版一致：更新后执行 docker login 持久化凭据
+		var reg schema.Registry
+		if err := h.DB.First(&reg, "\"registryId\" = ?", id).Error; err == nil {
+			var sid *string
+			if serverID != "" && serverID != "none" {
+				sid = &serverID
+			}
+			if err := h.dockerLogin(reg.RegistryURL, reg.Username, reg.Password, sid); err != nil {
+				log.Printf("Warning: docker login failed after registry update: %v", err)
+			}
+		}
 		return true, nil
 	}
 
@@ -614,28 +636,34 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 			RegistryID string `json:"registryId"`
 		}
 		json.Unmarshal(input, &in)
+		// 与 TS 版一致：删除前获取 registryUrl 用于 docker logout
+		var reg schema.Registry
+		if err := h.DB.First(&reg, "\"registryId\" = ?", in.RegistryID).Error; err == nil {
+			process.ExecAsync(fmt.Sprintf("docker logout %s", shEscape(reg.RegistryURL)))
+		}
 		h.DB.Delete(&schema.Registry{}, "\"registryId\" = ?", in.RegistryID)
 		return true, nil
 	}
 
+	// testRegistryByID：与 TS 版一致，通过 docker login CLI 持久化凭据（支持远程服务器）
 	testRegistryByID := func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
-			RegistryID string `json:"registryId"`
+			RegistryID string  `json:"registryId"`
+			ServerID   *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
 		var reg schema.Registry
 		if err := h.DB.First(&reg, "\"registryId\" = ?", in.RegistryID).Error; err != nil {
 			return nil, &trpcErr{"Registry not found", "NOT_FOUND", 404}
 		}
-		if h.Docker != nil {
-			if err := h.Docker.TestRegistryLogin(c.Request().Context(), reg.RegistryURL, reg.Username, reg.Password); err != nil {
-				return nil, &trpcErr{"Registry connection failed: " + err.Error(), "BAD_REQUEST", 400}
-			}
+		if err := h.dockerLogin(reg.RegistryURL, reg.Username, reg.Password, in.ServerID); err != nil {
+			return nil, &trpcErr{"Registry connection failed: " + err.Error(), "BAD_REQUEST", 400}
 		}
 		return true, nil
 	}
 	r["registry.testConnection"] = testRegistryByID
 	r["registry.testRegistryById"] = testRegistryByID
+	// testRegistry：与 TS 版一致，使用传入的原始凭据测试（支持远程服务器）
 	r["registry.testRegistry"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			RegistryURL string  `json:"registryUrl"`
@@ -644,10 +672,8 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 			ServerID    *string `json:"serverId"`
 		}
 		json.Unmarshal(input, &in)
-		if h.Docker != nil {
-			if err := h.Docker.TestRegistryLogin(c.Request().Context(), in.RegistryURL, in.Username, in.Password); err != nil {
-				return nil, &trpcErr{"Registry connection failed: " + err.Error(), "BAD_REQUEST", 400}
-			}
+		if err := h.dockerLogin(in.RegistryURL, in.Username, in.Password, in.ServerID); err != nil {
+			return nil, &trpcErr{"Registry connection failed: " + err.Error(), "BAD_REQUEST", 400}
 		}
 		return true, nil
 	}

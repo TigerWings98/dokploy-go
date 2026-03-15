@@ -103,9 +103,11 @@ func (s *Service) RestoreBackup(databaseID string, destinationID string, databas
 		tempDir := "/tmp/dokploy-restore"
 		baseName := filepath.Base(backupFile)
 		decompressedName := strings.TrimSuffix(baseName, ".gz")
+		// 先确保容器内有兼容版本的 mongorestore
+		installTools := ensureMongoToolsCmd("$CONTAINER_ID")
 		fullCmd = fmt.Sprintf(
-			`CONTAINER_ID=$(%s) && rm -rf %s && mkdir -p %s && %s %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
-			containerSearch, tempDir, tempDir, rcloneCommand, tempDir, tempDir, baseName, restoreCommand, decompressedName, tempDir,
+			`CONTAINER_ID=$(%s) && %s && rm -rf %s && mkdir -p %s && %s %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
+			containerSearch, installTools, tempDir, tempDir, rcloneCommand, tempDir, tempDir, baseName, restoreCommand, decompressedName, tempDir,
 		)
 	} else {
 		// 其他数据库：rclone cat → gunzip → 恢复命令（流式管道）
@@ -253,9 +255,10 @@ func (s *Service) RestoreComposeBackup(composeID string, destinationID string, d
 		tempDir := "/tmp/dokploy-restore"
 		baseName := filepath.Base(backupFile)
 		decompressedName := strings.TrimSuffix(baseName, ".gz")
+		installTools := ensureMongoToolsCmd("$CONTAINER_ID")
 		fullCmd = fmt.Sprintf(
-			`CONTAINER_ID=$(%s) && rm -rf %s && mkdir -p %s && %s %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
-			containerSearch, tempDir, tempDir, rcloneCommand, tempDir, tempDir, baseName, restoreCommand, decompressedName, tempDir,
+			`CONTAINER_ID=$(%s) && %s && rm -rf %s && mkdir -p %s && %s %s && cd %s && gunzip -f "%s" && %s < "%s" && rm -rf %s`,
+			containerSearch, installTools, tempDir, tempDir, rcloneCommand, tempDir, tempDir, baseName, restoreCommand, decompressedName, tempDir,
 		)
 	} else {
 		fullCmd = fmt.Sprintf(

@@ -448,6 +448,13 @@ func (s *Service) RunBackup(backupID string) error {
 		}
 	}
 
+	// 如果是 MongoDB，需要确保容器内 mongodump 版本兼容
+	isMongoBackup := backup.DatabaseType == schema.DatabaseTypeMongo
+	mongoInstallStep := ""
+	if isMongoBackup {
+		mongoInstallStep = ensureMongoToolsCmd("$CONTAINER_ID") + " && "
+	}
+
 	// 获取日志路径（与 TS 版 getBackupCommand 对齐：每一步都写入日志文件）
 	logPath := ""
 	if deployment != nil {
@@ -466,7 +473,7 @@ if [ -z "$CONTAINER_ID" ]; then
   exit 1;
 fi
 echo "[$(date)] Container Up: $CONTAINER_ID" >> %s;
-BACKUP_OUTPUT=$(%s 2>&1 >/dev/null) || {
+%sBACKUP_OUTPUT=$(%s 2>&1 >/dev/null) || {
   echo "[$(date)] Error: Backup failed" >> %s;
   echo "Error: $BACKUP_OUTPUT" >> %s;
   exit 1;
@@ -484,15 +491,15 @@ echo "Backup done" >> %s;`,
 			containerSearch,
 			logPath,
 			logPath,
-			dumpCommand, logPath, logPath,
+			mongoInstallStep, dumpCommand, logPath, logPath,
 			logPath, logPath,
 			dumpCommand, rcloneCommand, logPath, logPath,
 			logPath, logPath,
 		)
 	} else {
 		// 降级：无日志路径时使用简单命令
-		fullCmd = fmt.Sprintf(`set -eo pipefail; CONTAINER_ID=$(%s); if [ -z "$CONTAINER_ID" ]; then echo "Error: Container not found"; exit 1; fi; %s | %s`,
-			containerSearch, dumpCommand, rcloneCommand,
+		fullCmd = fmt.Sprintf(`set -eo pipefail; CONTAINER_ID=$(%s); if [ -z "$CONTAINER_ID" ]; then echo "Error: Container not found"; exit 1; fi; %s%s | %s`,
+			containerSearch, mongoInstallStep, dumpCommand, rcloneCommand,
 		)
 	}
 
@@ -807,6 +814,28 @@ func getComposeContainerCommand(appName, serviceName, composeType string) string
 	}
 	return fmt.Sprintf(`docker ps -q --filter "status=running" --filter "label=com.docker.compose.project=%s" --filter "label=com.docker.compose.service=%s" | head -n 1`,
 		appName, serviceName)
+}
+
+// ensureMongoToolsCmd 返回在容器内安装/更新 mongodb-database-tools 的命令。
+// 社区 mongo 镜像（如 mongo:7.0-pi）自带的 mongodump/mongorestore 可能版本过旧，
+// 无法兼容当前 MongoDB wire protocol，需要安装新版工具。
+// 检测方法：新版工具 version 以 "100." 开头（如 100.10.0），旧版显示 "version: x.x.x"。
+// 自动检测容器 OS 版本和 MongoDB 版本，构建正确的 repo URL。
+func ensureMongoToolsCmd(containerIDVar string) string {
+	return fmt.Sprintf(
+		`docker exec %s bash -c "`+
+			`if mongorestore --version 2>&1 | head -1 | grep -q '100\.'; then exit 0; fi; `+
+			`echo 'Installing mongodb-database-tools...'; `+
+			`apt-get update -qq > /dev/null 2>&1 && apt-get install -y -qq gnupg curl > /dev/null 2>&1; `+
+			`CODENAME=\$(. /etc/os-release && echo \$VERSION_CODENAME); `+
+			`MONGO_VER=\$(mongod --version 2>/dev/null | grep -oP 'v\\K[0-9]+\\.[0-9]+' | head -1 || echo '7.0'); `+
+			`curl -fsSL https://www.mongodb.org/static/pgp/server-\${MONGO_VER}.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server.gpg 2>/dev/null; `+
+			`echo \"deb [ signed-by=/usr/share/keyrings/mongodb-server.gpg ] https://repo.mongodb.org/apt/ubuntu \${CODENAME}/mongodb-org/\${MONGO_VER} multiverse\" > /etc/apt/sources.list.d/mongodb-org.list; `+
+			`apt-get update -qq > /dev/null 2>&1 && apt-get install -y -qq mongodb-database-tools > /dev/null 2>&1 && `+
+			`echo 'mongodb-database-tools installed successfully' || echo 'Warning: failed to install mongodb-database-tools'`+
+			`"`,
+		containerIDVar,
+	)
 }
 
 // getRcloneFlags 生成 rclone S3 参数（与 TS 版 getS3Credentials 对齐）

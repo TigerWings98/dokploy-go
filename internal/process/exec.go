@@ -53,7 +53,7 @@ func ExecAsync(command string, opts ...ExecOption) (*ExecResult, error) {
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.CommandContext(ctx, o.Shell, "-c", command)
 	if o.Dir != "" {
 		cmd.Dir = o.Dir
 	}
@@ -94,7 +94,7 @@ func ExecAsyncStream(command string, onData func(string), opts ...ExecOption) (*
 		opt(o)
 	}
 
-	cmd := exec.Command("sh", "-c", command)
+	cmd := exec.Command(o.Shell, "-c", command)
 	if o.Dir != "" {
 		cmd.Dir = o.Dir
 	}
@@ -182,10 +182,11 @@ type execOptions struct {
 	Dir     string
 	Env     []string
 	Timeout time.Duration
+	Shell   string // 默认 "sh"，可设为 "/bin/bash"
 }
 
 func defaultOptions() *execOptions {
-	return &execOptions{}
+	return &execOptions{Shell: "sh"}
 }
 
 // WithDir sets the working directory.
@@ -201,6 +202,11 @@ func WithEnv(env []string) ExecOption {
 // WithTimeout sets the execution timeout.
 func WithTimeout(d time.Duration) ExecOption {
 	return func(o *execOptions) { o.Timeout = d }
+}
+
+// WithShell 指定执行命令的 shell（默认 "sh"，备份等需要 pipefail 的场景用 "/bin/bash"）
+func WithShell(shell string) ExecOption {
+	return func(o *execOptions) { o.Shell = shell }
 }
 
 // Sleep pauses for the given duration.

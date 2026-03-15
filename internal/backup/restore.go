@@ -290,13 +290,99 @@ func (s *Service) RestoreComposeBackup(composeID string, destinationID string, d
 	return nil
 }
 
+// cleanupManagedServices 在 webserver restore 之前，清理所有由 Dokploy 管辖的 Docker 服务。
+// 通过查询当前数据库获取所有 appName，逐个移除对应的 Docker Swarm 服务/Stack/Compose 项目。
+// 跳过 Dokploy 系统服务（dokploy-traefik、dokploy-postgres）。
+func (s *Service) cleanupManagedServices(emit func(string)) {
+	emit("=== Pre-restore cleanup: removing all Dokploy-managed services ===")
+
+	// 1. 清理 Application 的 Swarm 服务
+	var apps []schema.Application
+	s.db.Select("\"appName\"").Find(&apps)
+	for _, app := range apps {
+		emit(fmt.Sprintf("Removing application service: %s", app.AppName))
+		process.ExecAsync(fmt.Sprintf("docker service rm %s 2>/dev/null || true", app.AppName))
+	}
+
+	// 2. 清理 Preview Deployment 的 Swarm 服务
+	var previews []schema.PreviewDeployment
+	s.db.Select("\"appName\"").Find(&previews)
+	for _, pd := range previews {
+		emit(fmt.Sprintf("Removing preview deployment service: %s", pd.AppName))
+		process.ExecAsync(fmt.Sprintf("docker service rm %s 2>/dev/null || true", pd.AppName))
+	}
+
+	// 3. 清理 Database 的 Swarm 服务 (postgres/mysql/mariadb/mongo/redis)
+	type dbRecord struct {
+		AppName string
+	}
+	dbTables := []struct {
+		table string
+		model interface{}
+	}{
+		{"postgres", &[]schema.Postgres{}},
+		{"mysql", &[]schema.MySQL{}},
+		{"mariadb", &[]schema.MariaDB{}},
+		{"mongo", &[]schema.Mongo{}},
+		{"redis", &[]schema.Redis{}},
+	}
+	for _, dt := range dbTables {
+		var names []dbRecord
+		s.db.Table(dt.table).Select("\"appName\"").Find(&names)
+		for _, n := range names {
+			emit(fmt.Sprintf("Removing %s database service: %s", dt.table, n.AppName))
+			process.ExecAsync(fmt.Sprintf("docker service rm %s 2>/dev/null || true", n.AppName))
+		}
+	}
+
+	// 4. 清理 Compose 项目（区分 stack 和 docker-compose 类型）
+	var composes []schema.Compose
+	s.db.Select("\"appName\"", "\"composeType\"", "\"suffix\"").Find(&composes)
+	composePath := s.cfg.Paths.ComposePath
+	for _, comp := range composes {
+		projectPath := filepath.Join(composePath, comp.AppName, "code")
+		if comp.ComposeType == schema.ComposeTypeStack {
+			emit(fmt.Sprintf("Removing stack: %s", comp.AppName))
+			process.ExecAsync(fmt.Sprintf(
+				"docker network disconnect %s dokploy-traefik 2>/dev/null || true; docker stack rm %s 2>/dev/null || true",
+				comp.AppName, comp.AppName,
+			))
+		} else {
+			emit(fmt.Sprintf("Removing compose project: %s", comp.AppName))
+			process.ExecAsync(fmt.Sprintf(
+				"docker network disconnect %s dokploy-traefik 2>/dev/null || true; cd %s 2>/dev/null && docker compose -p %s down --remove-orphans 2>/dev/null || true",
+				comp.AppName, projectPath, comp.AppName,
+			))
+		}
+	}
+
+	// 5. 清理 Traefik 动态路由配置文件（restore 会覆盖整个 /etc/dokploy，但这里先确保运行中的 Traefik 不再路由到已删服务）
+	dynamicPath := s.cfg.Paths.DynamicTraefikPath
+	emit(fmt.Sprintf("Cleaning Traefik dynamic configs: %s", dynamicPath))
+	process.ExecAsync(fmt.Sprintf("rm -f %s/*.yml 2>/dev/null || true", dynamicPath))
+
+	// 6. 停止所有 backup cron 任务
+	emit("Stopping all backup cron jobs...")
+	s.mu.Lock()
+	for id, entryID := range s.jobs {
+		s.cron.Remove(entryID)
+		delete(s.jobs, id)
+	}
+	s.mu.Unlock()
+
+	emit("=== Pre-restore cleanup completed ===")
+}
+
 // RestoreWebServerBackup 从 S3 下载 Web Server 备份 zip 并恢复文件系统 + Dokploy PostgreSQL 数据库。
-// 与 TS 版 restoreWebServerBackup 完全一致。
+// 增强版：restore 前先清理所有 Dokploy 管辖的 Docker 服务，避免孤儿容器。
 func (s *Service) RestoreWebServerBackup(destinationID string, backupFile string, emit func(string)) error {
 	var dest schema.Destination
 	if err := s.db.First(&dest, "\"destinationId\" = ?", destinationID).Error; err != nil {
 		return fmt.Errorf("destination not found: %w", err)
 	}
+
+	// ★ 在恢复之前，清理所有 Dokploy 管辖的服务（防止孤儿容器）
+	s.cleanupManagedServices(emit)
 
 	rcloneFlags := getRcloneFlags(&dest)
 	bucketPath := fmt.Sprintf(":s3:%s", dest.Bucket)

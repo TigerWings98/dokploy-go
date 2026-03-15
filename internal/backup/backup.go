@@ -6,6 +6,7 @@ package backup
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -208,6 +209,31 @@ func (s *Service) createBackupDeployment(backup *schema.Backup, title string) *s
 	return deployment
 }
 
+// extractExecError 从 process.ExecError 中提取 stderr 详细信息，避免只返回 "exit status 2" 这种模糊错误
+func extractExecError(prefix string, err error) error {
+	var execErr *process.ExecError
+	if errors.As(err, &execErr) {
+		detail := execErr.Stderr
+		if detail == "" {
+			detail = execErr.Stdout
+		}
+		if detail != "" {
+			return fmt.Errorf("%s: %s (exit code %d)\nDetail: %s", prefix, err.Error(), execErr.ExitCode, detail)
+		}
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
+}
+
+// appendLog 追加一行日志到备份日志文件
+func appendLog(logPath string, msg string) {
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(msg + "\n")
+}
+
 // updateDeploymentStatus 更新 Deployment 记录状态（与 TS 版 updateDeploymentStatus 对齐）
 func (s *Service) updateDeploymentStatus(deployment *schema.Deployment, status schema.DeploymentStatus, errMsg string) {
 	if deployment == nil {
@@ -255,6 +281,10 @@ func (s *Service) RunBackup(backupID string) error {
 	var backupErr error
 	defer func() {
 		if backupErr != nil {
+			// 把错误信息追加到日志文件，确保前端能看到
+			if deployment != nil && deployment.LogPath != "" {
+				appendLog(deployment.LogPath, fmt.Sprintf("[error] %s", backupErr.Error()))
+			}
 			s.sendBackupNotification(&backup, "error", backupErr.Error())
 			s.updateDeploymentStatus(deployment, schema.DeploymentStatusError, backupErr.Error())
 		}
@@ -418,10 +448,53 @@ func (s *Service) RunBackup(backupID string) error {
 		}
 	}
 
-	// 组装完整备份流水线命令（与 TS 版 getBackupCommand 完全一致）
-	fullCmd := fmt.Sprintf(`set -eo pipefail; CONTAINER_ID=$(%s); if [ -z "$CONTAINER_ID" ]; then echo "Error: Container not found"; exit 1; fi; %s | %s`,
-		containerSearch, dumpCommand, rcloneCommand,
-	)
+	// 获取日志路径（与 TS 版 getBackupCommand 对齐：每一步都写入日志文件）
+	logPath := ""
+	if deployment != nil {
+		logPath = deployment.LogPath
+	}
+
+	// 组装完整备份流水线命令（与 TS 版 getBackupCommand 完全一致，含分步日志）
+	var fullCmd string
+	if logPath != "" {
+		fullCmd = fmt.Sprintf(`set -eo pipefail;
+echo "[$(date)] Starting backup process..." >> %s;
+echo "[$(date)] Executing backup command..." >> %s;
+CONTAINER_ID=$(%s)
+if [ -z "$CONTAINER_ID" ]; then
+  echo "[$(date)] Error: Container not found" >> %s;
+  exit 1;
+fi
+echo "[$(date)] Container Up: $CONTAINER_ID" >> %s;
+BACKUP_OUTPUT=$(%s 2>&1 >/dev/null) || {
+  echo "[$(date)] Error: Backup failed" >> %s;
+  echo "Error: $BACKUP_OUTPUT" >> %s;
+  exit 1;
+}
+echo "[$(date)] backup completed successfully" >> %s;
+echo "[$(date)] Starting upload to S3..." >> %s;
+UPLOAD_OUTPUT=$(%s | %s 2>&1 >/dev/null) || {
+  echo "[$(date)] Error: Upload to S3 failed" >> %s;
+  echo "Error: $UPLOAD_OUTPUT" >> %s;
+  exit 1;
+}
+echo "[$(date)] Upload to S3 completed successfully" >> %s;
+echo "Backup done" >> %s;`,
+			logPath, logPath,
+			containerSearch,
+			logPath,
+			logPath,
+			dumpCommand, logPath, logPath,
+			logPath, logPath,
+			dumpCommand, rcloneCommand, logPath, logPath,
+			logPath, logPath,
+		)
+	} else {
+		// 降级：无日志路径时使用简单命令
+		fullCmd = fmt.Sprintf(`set -eo pipefail; CONTAINER_ID=$(%s); if [ -z "$CONTAINER_ID" ]; then echo "Error: Container not found"; exit 1; fi; %s | %s`,
+			containerSearch, dumpCommand, rcloneCommand,
+		)
+	}
 
 	// 执行（本地或远程 SSH）
 	if serverID != nil && server != nil && server.SSHKey != nil {
@@ -432,12 +505,12 @@ func (s *Service) RunBackup(backupID string) error {
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
 		if _, err := process.ExecAsyncRemote(conn, fullCmd, nil); err != nil {
-			backupErr = fmt.Errorf("failed to create database dump: %w", err)
+			backupErr = extractExecError("failed to create database dump", err)
 			return backupErr
 		}
 	} else {
 		if _, err := process.ExecAsync(fullCmd); err != nil {
-			backupErr = fmt.Errorf("failed to create database dump: %w", err)
+			backupErr = extractExecError("failed to create database dump", err)
 			return backupErr
 		}
 	}

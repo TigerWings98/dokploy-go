@@ -6,12 +6,16 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/docker/docker/api/types"
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/dokploy/dokploy/internal/builder"
 	"github.com/dokploy/dokploy/internal/config"
 	"github.com/dokploy/dokploy/internal/db"
@@ -307,17 +311,20 @@ func (s *ApplicationService) createService(app *schema.Application, writeLog fun
 	return s.createServiceLocal(app, writeLog)
 }
 
+// createServiceLocal 本地部署：使用 Docker SDK（与 TS 版 mechanizeDockerContainer 完全对齐）
+// TS 版使用 Dockerode SDK service.update() 整体替换 spec，而非 CLI --env-add 追加模式
+// 这确保了 update 时旧的环境变量、挂载、端口等被完全替换，不会累积残留
 func (s *ApplicationService) createServiceLocal(app *schema.Application, writeLog func(string)) error {
 	imageName := getImageName(app)
 	envVars := s.resolveEnvVars(app)
 
-	// Registry 登录
+	// Registry 登录（与 TS 版一致：需要先 docker login 持久化凭据）
 	if loginCmd := buildRegistryLoginCmd(app); loginCmd != "" {
 		writeLog("Logging into registry...")
 		process.ExecAsync(loginCmd)
 	}
 
-	// 文件挂载准备（将文件内容写入磁盘）
+	// 文件挂载准备（将文件内容写入磁盘，与 TS 版 createFile 对齐）
 	if fileCmd := buildFileMountsSetupCmd(app.AppName, app.Mounts); fileCmd != "" {
 		writeLog("Preparing file mounts...")
 		process.ExecAsync(fileCmd)
@@ -325,22 +332,56 @@ func (s *ApplicationService) createServiceLocal(app *schema.Application, writeLo
 
 	writeLog(fmt.Sprintf("Creating service: %s", app.AppName))
 
-	// 与 TS 版一致：先尝试 update，失败则 create
-	_, err := process.ExecAsync(fmt.Sprintf("docker service inspect %s", app.AppName))
-	if err == nil {
-		// 服务已存在，使用 update（保留零停机滚动更新）
-		updateCmd := buildServiceUpdateCmd(app, imageName, envVars)
-		writeLog("Service exists, updating...")
-		_, err = process.ExecAsyncStream(updateCmd, writeLog)
-		return err
+	// 构建完整的 ServiceSpec（与 TS 版 mechanizeDockerContainer 中的 CreateServiceOptions 完全对齐）
+	spec := buildApplicationServiceSpec(app, imageName, envVars)
+
+	// 构建 SDK auth 配置
+	var serviceCreateOpts types.ServiceCreateOptions
+	username, password, serverAddr, hasAuth := getAuthConfig(app)
+	if hasAuth {
+		authConfig := registrytypes.AuthConfig{
+			Username:      username,
+			Password:      password,
+			ServerAddress: serverAddr,
+		}
+		encodedAuth, _ := json.Marshal(authConfig)
+		serviceCreateOpts.EncodedRegistryAuth = base64.URLEncoding.EncodeToString(encodedAuth)
 	}
 
-	// 服务不存在，创建新服务
-	cmd := buildServiceCreateCmd(app, imageName, envVars)
-	_, err = process.ExecAsyncStream(cmd, writeLog)
-	return err
+	ctx := context.Background()
+
+	// 与 TS 版完全一致：先尝试 inspect + update（ForceUpdate++），失败则 create
+	svc, _, err := s.docker.DockerClient().ServiceInspectWithRaw(ctx, app.AppName, types.ServiceInspectOptions{})
+	if err == nil {
+		// 服务已存在 → update（ForceUpdate++ 强制重启任务，整体替换 spec）
+		writeLog("Service exists, updating...")
+		spec.TaskTemplate.ForceUpdate = svc.Spec.TaskTemplate.ForceUpdate + 1
+		_, err = s.docker.DockerClient().ServiceUpdate(ctx, svc.ID, svc.Version, spec, types.ServiceUpdateOptions{
+			EncodedRegistryAuth: serviceCreateOpts.EncodedRegistryAuth,
+		})
+		if err != nil {
+			writeLog(fmt.Sprintf("Error updating service: %v", err))
+			return err
+		}
+		writeLog("Service updated successfully!")
+		return nil
+	}
+
+	// 服务不存在 → create
+	writeLog("Creating new service...")
+	_, err = s.docker.DockerClient().ServiceCreate(ctx, spec, serviceCreateOpts)
+	if err != nil {
+		writeLog(fmt.Sprintf("Error creating service: %v", err))
+		return err
+	}
+	writeLog("Service created successfully!")
+	return nil
 }
 
+// createServiceRemote 远程部署：使用 rm + create 模式替代 CLI update
+// TS 版远程也通过 getRemoteDocker(serverId) 建立 SSH 隧道使用 SDK 整体替换 spec，
+// 但 Go 无法通过 SSH 隧道使用 Docker SDK，因此远程必须用 CLI。
+// 为避免 CLI --env-add/--mount-add 等累积问题，改为 rm + create 确保 spec 完全替换。
 func (s *ApplicationService) createServiceRemote(app *schema.Application, writeLog func(string)) error {
 	if app.Server == nil || app.Server.SSHKey == nil {
 		return fmt.Errorf("server or SSH key not found")
@@ -368,11 +409,11 @@ func (s *ApplicationService) createServiceRemote(app *schema.Application, writeL
 		process.ExecAsyncRemote(conn, fileCmd, nil)
 	}
 
-	// 与 TS 版一致：先尝试 update，失败则 create
-	updateCmd := buildServiceUpdateCmd(app, imageName, envVars)
+	// 远程部署：先尝试 rm 旧服务（忽略错误），然后 create 新服务
+	// 这等价于 SDK 的整体替换，避免 --env-add 等累积问题
 	createCmd := buildServiceCreateCmd(app, imageName, envVars)
-	// 使用 || 连接：update 失败时自动 create
-	cmd := fmt.Sprintf("%s || %s", updateCmd, createCmd)
+	// rm 可能失败（服务不存在），但不影响后续 create
+	cmd := fmt.Sprintf("docker service rm %s 2>/dev/null; sleep 2; %s", app.AppName, createCmd)
 
 	writeLog(fmt.Sprintf("Creating/updating service on remote: %s", app.AppName))
 	_, err := process.ExecAsyncRemote(conn, cmd, writeLog)

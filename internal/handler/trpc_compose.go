@@ -464,14 +464,13 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 		if !ok {
 			return []interface{}{}, nil
 		}
-		var result []map[string]interface{}
+		// 与 TS 版一致：返回纯字符串数组 ["svc1", "svc2"]，而非对象数组
+		var result []string
 		for name := range services {
-			result = append(result, map[string]interface{}{
-				"name": name,
-			})
+			result = append(result, name)
 		}
 		if result == nil {
-			result = []map[string]interface{}{}
+			result = []string{}
 		}
 		return result, nil
 	}
@@ -482,9 +481,59 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 			ServiceName string `json:"serviceName"`
 		}
 		json.Unmarshal(input, &in)
-		var mounts []schema.Mount
-		h.DB.Where("\"composeId\" = ? AND \"serviceName\" = ?", in.ComposeID, in.ServiceName).Find(&mounts)
-		return mounts, nil
+
+		var comp schema.Compose
+		if err := h.DB.First(&comp, "\"composeId\" = ?", in.ComposeID).Error; err != nil {
+			return nil, &trpcErr{"Compose not found", "NOT_FOUND", 404}
+		}
+
+		// 与 TS 版 getComposeContainer 一致：通过 Docker 容器标签查找对应服务容器
+		// 支持远程服务器（通过 SSH 执行 Docker CLI）
+		var labelFilter string
+		if comp.ComposeType == schema.ComposeTypeStack {
+			labelFilter = fmt.Sprintf(
+				`--filter "label=com.docker.stack.namespace=%s" --filter "label=com.docker.swarm.service.name=%s_%s"`,
+				comp.AppName, comp.AppName, in.ServiceName,
+			)
+		} else {
+			labelFilter = fmt.Sprintf(
+				`--filter "label=com.docker.compose.project=%s" --filter "label=com.docker.compose.service=%s"`,
+				comp.AppName, in.ServiceName,
+			)
+		}
+
+		// 查找容器 ID
+		findCmd := fmt.Sprintf(`docker ps -q --filter "status=running" %s | head -n 1`, labelFilter)
+		containerID := strings.TrimSpace(h.execRemoteOrLocal(findCmd, comp.ServerID))
+		if containerID == "" {
+			return []interface{}{}, nil
+		}
+
+		// 获取挂载信息（JSON 格式）
+		inspectCmd := fmt.Sprintf(`docker inspect %s --format '{{json .Mounts}}'`, containerID)
+		mountsJSON := h.execRemoteOrLocal(inspectCmd, comp.ServerID)
+		if mountsJSON == "" || mountsJSON == "null" {
+			return []interface{}{}, nil
+		}
+
+		var mounts []map[string]interface{}
+		if err := json.Unmarshal([]byte(mountsJSON), &mounts); err != nil {
+			return []interface{}{}, nil
+		}
+
+		// 与 TS 版一致：过滤 Type=volume 且 Source 非空的挂载
+		var result []map[string]interface{}
+		for _, m := range mounts {
+			mType, _ := m["Type"].(string)
+			mSource, _ := m["Source"].(string)
+			if mType == "volume" && mSource != "" {
+				result = append(result, m)
+			}
+		}
+		if result == nil {
+			result = []map[string]interface{}{}
+		}
+		return result, nil
 	}
 
 	r["compose.templates"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {

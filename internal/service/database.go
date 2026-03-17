@@ -7,13 +7,16 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
+	containertypes "github.com/docker/docker/api/types/container"
 	dockermount "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/dokploy/dokploy/internal/config"
@@ -39,20 +42,23 @@ func NewDatabaseService(database *db.DB, dockerClient *docker.Client, cfg *confi
 func (s *DatabaseService) DeployPostgres(postgresID string, onData func(string)) error {
 	var pg schema.Postgres
 	if err := s.db.Preload("Mounts").Preload("Server").Preload("Server.SSHKey").
+		Preload("Environment").Preload("Environment.Project").
 		First(&pg, "\"postgresId\" = ?", postgresID).Error; err != nil {
 		return err
 	}
 	s.updatePostgresStatus(postgresID, schema.ApplicationStatusRunning)
 
-	envVars := map[string]string{
-		"POSTGRES_DB":       pg.DatabaseName,
-		"POSTGRES_USER":     pg.DatabaseUser,
-		"POSTGRES_PASSWORD": pg.DatabasePassword,
+	// 与 TS 版一致：构建默认环境变量字符串，然后通过 prepareEnvironmentVariables 解析模板
+	defaultEnv := fmt.Sprintf("POSTGRES_DB=%s\nPOSTGRES_USER=%s\nPOSTGRES_PASSWORD=%s",
+		pg.DatabaseName, pg.DatabaseUser, pg.DatabasePassword)
+	if pg.Env != nil && *pg.Env != "" {
+		defaultEnv += "\n" + *pg.Env
 	}
 
 	err := s.deployDatabaseService(pg.AppName, pg.DockerImage, pg.ServerID, pg.Server,
-		envVars, pg.Command, pg.Env, pg.Mounts,
-		pg.MemoryLimit, pg.CPULimit, pg.ExternalPort, 5432, onData)
+		defaultEnv, pg.Command, []string(pg.Args), pg.Mounts,
+		pg.MemoryLimit, pg.MemoryReservation, pg.CPULimit, pg.CPUReservation,
+		pg.ExternalPort, 5432, &pg.SwarmConfig, pg.Environment, onData)
 	if err != nil {
 		s.updatePostgresStatus(postgresID, schema.ApplicationStatusError)
 		return err
@@ -62,25 +68,33 @@ func (s *DatabaseService) DeployPostgres(postgresID string, onData func(string))
 	return nil
 }
 
-// DeployMySQL 部署 MySQL 服务
+// DeployMySQL 部署 MySQL 服务（与 TS 版对齐：root 用户不设 MYSQL_USER/MYSQL_PASSWORD）
 func (s *DatabaseService) DeployMySQL(mysqlID string, onData func(string)) error {
 	var my schema.MySQL
 	if err := s.db.Preload("Mounts").Preload("Server").Preload("Server.SSHKey").
+		Preload("Environment").Preload("Environment.Project").
 		First(&my, "\"mysqlId\" = ?", mysqlID).Error; err != nil {
 		return err
 	}
 	s.updateMySQLStatus(mysqlID, schema.ApplicationStatusRunning)
 
-	envVars := map[string]string{
-		"MYSQL_DATABASE":      my.DatabaseName,
-		"MYSQL_USER":          my.DatabaseUser,
-		"MYSQL_PASSWORD":      my.DatabasePassword,
-		"MYSQL_ROOT_PASSWORD": my.DatabaseRootPassword,
+	// 与 TS 版一致：root 用户只设 MYSQL_DATABASE + MYSQL_ROOT_PASSWORD，非 root 才加 MYSQL_USER/MYSQL_PASSWORD
+	var defaultEnv string
+	if my.DatabaseUser != "root" {
+		defaultEnv = fmt.Sprintf("MYSQL_USER=%s\nMYSQL_DATABASE=%s\nMYSQL_PASSWORD=%s\nMYSQL_ROOT_PASSWORD=%s",
+			my.DatabaseUser, my.DatabaseName, my.DatabasePassword, my.DatabaseRootPassword)
+	} else {
+		defaultEnv = fmt.Sprintf("MYSQL_DATABASE=%s\nMYSQL_ROOT_PASSWORD=%s",
+			my.DatabaseName, my.DatabaseRootPassword)
+	}
+	if my.Env != nil && *my.Env != "" {
+		defaultEnv += "\n" + *my.Env
 	}
 
 	err := s.deployDatabaseService(my.AppName, my.DockerImage, my.ServerID, my.Server,
-		envVars, my.Command, my.Env, my.Mounts,
-		my.MemoryLimit, my.CPULimit, my.ExternalPort, 3306, onData)
+		defaultEnv, my.Command, []string(my.Args), my.Mounts,
+		my.MemoryLimit, my.MemoryReservation, my.CPULimit, my.CPUReservation,
+		my.ExternalPort, 3306, &my.SwarmConfig, my.Environment, onData)
 	if err != nil {
 		s.updateMySQLStatus(mysqlID, schema.ApplicationStatusError)
 		return err
@@ -90,25 +104,26 @@ func (s *DatabaseService) DeployMySQL(mysqlID string, onData func(string)) error
 	return nil
 }
 
-// DeployMariaDB 部署 MariaDB 服务
+// DeployMariaDB 部署 MariaDB 服务（与 TS 版对齐：始终设置全部 4 个环境变量）
 func (s *DatabaseService) DeployMariaDB(mariadbID string, onData func(string)) error {
 	var mdb schema.MariaDB
 	if err := s.db.Preload("Mounts").Preload("Server").Preload("Server.SSHKey").
+		Preload("Environment").Preload("Environment.Project").
 		First(&mdb, "\"mariadbId\" = ?", mariadbID).Error; err != nil {
 		return err
 	}
 	s.updateMariaDBStatus(mariadbID, schema.ApplicationStatusRunning)
 
-	envVars := map[string]string{
-		"MARIADB_DATABASE":      mdb.DatabaseName,
-		"MARIADB_USER":          mdb.DatabaseUser,
-		"MARIADB_PASSWORD":      mdb.DatabasePassword,
-		"MARIADB_ROOT_PASSWORD": mdb.DatabaseRootPassword,
+	defaultEnv := fmt.Sprintf("MARIADB_DATABASE=%s\nMARIADB_USER=%s\nMARIADB_PASSWORD=%s\nMARIADB_ROOT_PASSWORD=%s",
+		mdb.DatabaseName, mdb.DatabaseUser, mdb.DatabasePassword, mdb.DatabaseRootPassword)
+	if mdb.Env != nil && *mdb.Env != "" {
+		defaultEnv += "\n" + *mdb.Env
 	}
 
 	err := s.deployDatabaseService(mdb.AppName, mdb.DockerImage, mdb.ServerID, mdb.Server,
-		envVars, mdb.Command, mdb.Env, mdb.Mounts,
-		mdb.MemoryLimit, mdb.CPULimit, mdb.ExternalPort, 3306, onData)
+		defaultEnv, mdb.Command, []string(mdb.Args), mdb.Mounts,
+		mdb.MemoryLimit, mdb.MemoryReservation, mdb.CPULimit, mdb.CPUReservation,
+		mdb.ExternalPort, 3306, &mdb.SwarmConfig, mdb.Environment, onData)
 	if err != nil {
 		s.updateMariaDBStatus(mariadbID, schema.ApplicationStatusError)
 		return err
@@ -118,23 +133,59 @@ func (s *DatabaseService) DeployMariaDB(mariadbID string, onData func(string)) e
 	return nil
 }
 
-// DeployMongo 部署 MongoDB 服务
+// DeployMongo 部署 MongoDB 服务（与 TS 版对齐：支持 ReplicaSet 副本集初始化）
 func (s *DatabaseService) DeployMongo(mongoID string, onData func(string)) error {
 	var mongo schema.Mongo
 	if err := s.db.Preload("Mounts").Preload("Server").Preload("Server.SSHKey").
+		Preload("Environment").Preload("Environment.Project").
 		First(&mongo, "\"mongoId\" = ?", mongoID).Error; err != nil {
 		return err
 	}
 	s.updateMongoStatus(mongoID, schema.ApplicationStatusRunning)
 
-	envVars := map[string]string{
-		"MONGO_INITDB_ROOT_USERNAME": mongo.DatabaseUser,
-		"MONGO_INITDB_ROOT_PASSWORD": mongo.DatabasePassword,
+	defaultEnv := fmt.Sprintf("MONGO_INITDB_ROOT_USERNAME=%s\nMONGO_INITDB_ROOT_PASSWORD=%s",
+		mongo.DatabaseUser, mongo.DatabasePassword)
+
+	// 与 TS 版一致：ReplicaSet 模式额外添加 MONGO_INITDB_DATABASE=admin
+	if mongo.ReplicaSets {
+		defaultEnv += "\nMONGO_INITDB_DATABASE=admin"
+	}
+	if mongo.Env != nil && *mongo.Env != "" {
+		defaultEnv += "\n" + *mongo.Env
+	}
+
+	// 与 TS 版一致：ReplicaSet 模式覆盖 command，使用启动脚本初始化副本集
+	command := mongo.Command
+	if mongo.ReplicaSets {
+		// 与 TS 版 buildMongo 完全对齐的副本集启动脚本
+		replicaScript := fmt.Sprintf(`mongod --port 27017 --replSet rs0 --bind_ip_all &
+MONGOD_PID=$!
+until mongosh --port 27017 --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
+  sleep 1
+done
+if ! mongosh --port 27017 --eval "rs.status().ok" > /dev/null 2>&1; then
+  mongosh --port 27017 --eval "rs.initiate({_id: 'rs0', members: [{_id: 0, host: '%s:27017'}]})"
+  until mongosh --port 27017 --eval "rs.isMaster().ismaster" | grep -q "true"; do
+    sleep 1
+  done
+  mongosh --port 27017 --eval "db.getSiblingDB('admin').createUser({user: '%s', pwd: '%s', roles: [{role: 'root', db: 'admin'}]})"
+fi
+wait $MONGOD_PID`, mongo.AppName, mongo.DatabaseUser, mongo.DatabasePassword)
+		// 与 TS 版一致：ReplicaSet 模式 command 固定为 /bin/bash -c script
+		// 通过 deployDatabaseService 传入 command="/bin/bash"，但实际使用 containerSpec.Args
+		// 需要特殊处理：这里用 command 传完整的 /bin/bash -c '...'
+		bashCmd := "/bin/bash"
+		command = &bashCmd
+		// 将脚本存储在一个临时变量中，通过 special deploy 逻辑处理
+		// 实际上在 buildServiceSpec 中 command 会 split by space，但 /bin/bash 不会有问题
+		// args 需要单独处理 — 我们通过设置 mongo.Args 来传递
+		mongo.Args = []string{"-c", replicaScript}
 	}
 
 	err := s.deployDatabaseService(mongo.AppName, mongo.DockerImage, mongo.ServerID, mongo.Server,
-		envVars, mongo.Command, mongo.Env, mongo.Mounts,
-		mongo.MemoryLimit, mongo.CPULimit, mongo.ExternalPort, 27017, onData)
+		defaultEnv, command, []string(mongo.Args), mongo.Mounts,
+		mongo.MemoryLimit, mongo.MemoryReservation, mongo.CPULimit, mongo.CPUReservation,
+		mongo.ExternalPort, 27017, &mongo.SwarmConfig, mongo.Environment, onData)
 	if err != nil {
 		s.updateMongoStatus(mongoID, schema.ApplicationStatusError)
 		return err
@@ -144,32 +195,34 @@ func (s *DatabaseService) DeployMongo(mongoID string, onData func(string)) error
 	return nil
 }
 
-// DeployRedis 部署 Redis 服务（与 TS 版对齐：密码通过 Command 传入，不用环境变量）
+// DeployRedis 部署 Redis 服务（与 TS 版对齐：REDIS_PASSWORD env + 默认 requirepass 命令）
 func (s *DatabaseService) DeployRedis(redisID string, onData func(string)) error {
 	var redis schema.Redis
 	if err := s.db.Preload("Mounts").Preload("Server").Preload("Server.SSHKey").
+		Preload("Environment").Preload("Environment.Project").
 		First(&redis, "\"redisId\" = ?", redisID).Error; err != nil {
 		return err
 	}
 	s.updateRedisStatus(redisID, schema.ApplicationStatusRunning)
 
-	envVars := map[string]string{}
-	// 与 TS 版一致：Redis 密码通过 command 传入
+	// 与 TS 版一致：REDIS_PASSWORD 作为环境变量
+	defaultEnv := fmt.Sprintf("REDIS_PASSWORD=%s", redis.DatabasePassword)
+	if redis.Env != nil && *redis.Env != "" {
+		defaultEnv += "\n" + *redis.Env
+	}
+
+	// 与 TS 版一致：如果有自定义 command 或 args，直接使用；否则默认 /bin/sh -c "redis-server --requirepass pw"
 	command := redis.Command
-	if redis.DatabasePassword != "" {
-		pw := redis.DatabasePassword
-		if command != nil && *command != "" {
-			cmdStr := fmt.Sprintf("%s --requirepass %s", *command, pw)
-			command = &cmdStr
-		} else {
-			cmdStr := fmt.Sprintf("redis-server --requirepass %s", pw)
-			command = &cmdStr
-		}
+	if (command == nil || *command == "") && len(redis.Args) == 0 {
+		bashCmd := "/bin/sh"
+		command = &bashCmd
+		redis.Args = []string{"-c", fmt.Sprintf("redis-server --requirepass %s", redis.DatabasePassword)}
 	}
 
 	err := s.deployDatabaseService(redis.AppName, redis.DockerImage, redis.ServerID, redis.Server,
-		envVars, command, redis.Env, redis.Mounts,
-		redis.MemoryLimit, redis.CPULimit, redis.ExternalPort, 6379, onData)
+		defaultEnv, command, []string(redis.Args), redis.Mounts,
+		redis.MemoryLimit, redis.MemoryReservation, redis.CPULimit, redis.CPUReservation,
+		redis.ExternalPort, 6379, &redis.SwarmConfig, redis.Environment, onData)
 	if err != nil {
 		s.updateRedisStatus(redisID, schema.ApplicationStatusError)
 		return err
@@ -390,14 +443,17 @@ func (s *DatabaseService) StartDatabase(databaseID string, dbType schema.Databas
 
 // deployDatabaseService 数据库部署核心逻辑
 // 与 TS 版对齐：使用 Docker SDK update-first / create-fallback（幂等，多次点击不冲突）
+// defaultEnv: 已合并的环境变量字符串（默认 + 自定义），将通过 prepareEnvironmentVariables 解析模板
 func (s *DatabaseService) deployDatabaseService(
 	appName, dockerImage string,
 	serverID *string, server *schema.Server,
-	envVars map[string]string,
-	command, extraEnv *string,
+	defaultEnv string,
+	command *string, args []string,
 	mounts []schema.Mount,
-	memoryLimit, cpuLimit *string,
+	memoryLimit, memoryReservation, cpuLimit, cpuReservation *string,
 	externalPort *int, defaultPort int,
+	swarmConfig *schema.SwarmConfig,
+	environment *schema.Environment,
 	onData func(string),
 ) error {
 	emit := func(msg string) {
@@ -420,45 +476,63 @@ func (s *DatabaseService) deployDatabaseService(
 
 	emit(fmt.Sprintf("App name: %s\n", appName))
 
-	// Step 2: 构建 ServiceSpec（与 TS 版 createService settings 对齐）
-	spec := s.buildServiceSpec(appName, dockerImage, envVars, command, extraEnv, mounts,
-		memoryLimit, cpuLimit, externalPort, defaultPort)
+	// 与 TS 版一致：通过 prepareEnvironmentVariables 解析模板变量
+	var projectEnv, environmentEnv string
+	if environment != nil {
+		environmentEnv = environment.Env
+		if environment.Project != nil {
+			projectEnv = environment.Project.Env
+		}
+	}
+	envVars := prepareEnvironmentVariables(defaultEnv, projectEnv, environmentEnv)
 
-	// Step 3: 部署（update-first / create-fallback）
+	// Step 2: 构建 ServiceSpec（与 TS 版 createService + generateConfigContainer 对齐）
+	spec := s.buildServiceSpec(appName, dockerImage, envVars, command, args, mounts,
+		memoryLimit, memoryReservation, cpuLimit, cpuReservation,
+		externalPort, defaultPort, swarmConfig)
+
+	// Step 3: 本地文件挂载准备（写入文件内容到磁盘）
+	for _, m := range mounts {
+		if m.Type == schema.MountTypeFile && m.FilePath != nil && m.Content != nil {
+			dir := filepath.Join("/etc/dokploy/applications", appName, "files")
+			filePath := filepath.Join(dir, *m.FilePath)
+			mkdirCmd := fmt.Sprintf("mkdir -p '%s'", dir)
+			writeCmd := fmt.Sprintf("echo '%s' | base64 -d > '%s'", base64Encode(*m.Content), filePath)
+			if serverID != nil && server != nil && server.SSHKey != nil {
+				conn := sshConnFromServer(server)
+				process.ExecAsyncRemote(conn, mkdirCmd+" && "+writeCmd, nil)
+			} else {
+				process.ExecAsync(mkdirCmd + " && " + writeCmd)
+			}
+		}
+	}
+
+	// Step 4: 部署（update-first / create-fallback）
 	if serverID != nil && server != nil && server.SSHKey != nil {
-		// 远程部署：通过 SSH CLI
-		return s.deployRemoteService(server, appName, dockerImage, envVars, command, extraEnv,
-			mounts, memoryLimit, cpuLimit, externalPort, defaultPort, emit)
+		// 远程部署：通过 SSH CLI（rm + create 模式）
+		return s.deployRemoteService(server, appName, dockerImage, envVars, command, args,
+			mounts, memoryLimit, memoryReservation, cpuLimit, cpuReservation,
+			externalPort, defaultPort, swarmConfig, emit)
 	}
 
 	// 本地部署：使用 Docker SDK（与 TS 版完全一致的 update-first 模式）
 	return s.deployLocalService(appName, spec, emit)
 }
 
-// buildServiceSpec 构建 Docker Swarm ServiceSpec（与 TS 版 createService settings 对齐）
+// buildServiceSpec 构建 Docker Swarm ServiceSpec
+// 与 TS 版 createService + generateConfigContainer 完全对齐：包含所有 Swarm JSONB 配置
 func (s *DatabaseService) buildServiceSpec(
 	appName, dockerImage string,
-	envVars map[string]string,
-	command, extraEnv *string,
+	envVars []string,
+	command *string, args []string,
 	mounts []schema.Mount,
-	memoryLimit, cpuLimit *string,
+	memoryLimit, memoryReservation, cpuLimit, cpuReservation *string,
 	externalPort *int, defaultPort int,
+	swarmConfig *schema.SwarmConfig,
 ) swarm.ServiceSpec {
-	// 环境变量列表
-	var envList []string
-	for k, v := range envVars {
-		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
-	}
-	if extraEnv != nil && *extraEnv != "" {
-		for _, line := range splitEnvLines(*extraEnv) {
-			line = strings.TrimSpace(line)
-			if line != "" && line[0] != '#' {
-				envList = append(envList, line)
-			}
-		}
-	}
+	applicationsPath := "/etc/dokploy/applications"
 
-	// 挂载列表
+	// ===== 挂载列表（volume/bind/file 三种类型，与 TS 版对齐） =====
 	var mountList []dockermount.Mount
 	for _, m := range mounts {
 		switch m.Type {
@@ -478,13 +552,24 @@ func (s *DatabaseService) buildServiceSpec(
 					Target: m.MountPath,
 				})
 			}
+		case schema.MountTypeFile:
+			if m.FilePath != nil {
+				sourcePath := filepath.Join(applicationsPath, appName, "files", *m.FilePath)
+				mountList = append(mountList, dockermount.Mount{
+					Type:   dockermount.TypeBind,
+					Source: sourcePath,
+					Target: m.MountPath,
+				})
+			}
 		}
 	}
 
-	// 资源限制
+	// ===== 资源限制与预留（与 TS 版 calculateResources 对齐） =====
 	var resources *swarm.ResourceRequirements
 	var limits swarm.Limit
+	var reservations swarm.Resources
 	hasLimits := false
+	hasReservations := false
 	if memoryLimit != nil && *memoryLimit != "" {
 		limits.MemoryBytes = parseMemoryString(*memoryLimit)
 		hasLimits = true
@@ -493,11 +578,56 @@ func (s *DatabaseService) buildServiceSpec(
 		limits.NanoCPUs = parseCPUString(*cpuLimit)
 		hasLimits = true
 	}
-	if hasLimits {
-		resources = &swarm.ResourceRequirements{Limits: &limits}
+	if memoryReservation != nil && *memoryReservation != "" {
+		reservations.MemoryBytes = parseMemoryString(*memoryReservation)
+		hasReservations = true
+	}
+	if cpuReservation != nil && *cpuReservation != "" {
+		reservations.NanoCPUs = parseCPUString(*cpuReservation)
+		hasReservations = true
+	}
+	if hasLimits || hasReservations {
+		resources = &swarm.ResourceRequirements{}
+		if hasLimits {
+			resources.Limits = &limits
+		}
+		if hasReservations {
+			resources.Reservations = &reservations
+		}
 	}
 
-	// 端口映射（与 TS 版一致：Mode=dnsrr，PublishMode=host）
+	// ===== ContainerSpec =====
+	containerSpec := &swarm.ContainerSpec{
+		Image:  dockerImage,
+		Env:    envVars,
+		Mounts: mountList,
+	}
+
+	// Command override（与 TS 版一致：command.split(" ") → ContainerSpec.Command）
+	if command != nil && *command != "" {
+		containerSpec.Command = strings.Fields(*command)
+	}
+	// Args（与 TS 版一致：args → ContainerSpec.Args）
+	if len(args) > 0 {
+		containerSpec.Args = args
+	}
+
+	// ===== 以下从 SwarmConfig 的 interface{} 字段中解析 Swarm 配置 =====
+	// SwarmConfig 使用 JSONField[interface{}]，需要 JSON 重编码后反序列化为类型化结构体
+
+	// 默认值
+	replicas := uint64(1)
+	networks := []swarm.NetworkAttachmentConfig{{Target: "dokploy-network"}}
+	var placement *swarm.Placement
+	var restartPolicy *swarm.RestartPolicy
+	var updateConfig *swarm.UpdateConfig
+	var rollbackConfig *swarm.UpdateConfig
+	var endpointSpec *swarm.EndpointSpec
+	mode := swarm.ServiceMode{
+		Replicated: &swarm.ReplicatedService{Replicas: &replicas},
+	}
+
+	// 默认 EndpointSpec（与 TS 版一致：dnsrr + host mode ports）
 	var ports []swarm.PortConfig
 	if externalPort != nil && *externalPort > 0 {
 		ports = append(ports, swarm.PortConfig{
@@ -507,36 +637,249 @@ func (s *DatabaseService) buildServiceSpec(
 			PublishMode:   swarm.PortConfigPublishModeHost,
 		})
 	}
-
-	// ContainerSpec
-	containerSpec := &swarm.ContainerSpec{
-		Image:  dockerImage,
-		Env:    envList,
-		Mounts: mountList,
-	}
-	// Command override（与 TS 版一致：command → ContainerSpec.Command (ENTRYPOINT)）
-	if command != nil && *command != "" {
-		containerSpec.Command = strings.Fields(*command)
+	endpointSpec = &swarm.EndpointSpec{
+		Mode:  swarm.ResolutionModeDNSRR,
+		Ports: ports,
 	}
 
-	replicas := uint64(1)
+	// 默认 UpdateConfig（与 TS 版一致）
+	updateConfig = &swarm.UpdateConfig{
+		Parallelism: 1,
+		Order:       "start-first",
+	}
+
+	// 默认 Placement（与 TS 版一致：有挂载时约束到 manager）
+	if len(mounts) > 0 {
+		placement = &swarm.Placement{Constraints: []string{"node.role==manager"}}
+	}
+
+	if swarmConfig != nil {
+		// ===== HealthCheck =====
+		if hcData := swarmConfig.HealthCheckSwarm.Data; hcData != nil {
+			var hc schema.HealthCheckSwarm
+			if remarshal(hcData, &hc) == nil && len(hc.Test) > 0 {
+				containerSpec.Healthcheck = &containertypes.HealthConfig{
+					Test: hc.Test,
+				}
+				if hc.Interval != nil {
+					containerSpec.Healthcheck.Interval = time.Duration(*hc.Interval)
+				}
+				if hc.Timeout != nil {
+					containerSpec.Healthcheck.Timeout = time.Duration(*hc.Timeout)
+				}
+				if hc.StartPeriod != nil {
+					containerSpec.Healthcheck.StartPeriod = time.Duration(*hc.StartPeriod)
+				}
+				if hc.Retries != nil {
+					containerSpec.Healthcheck.Retries = *hc.Retries
+				}
+			}
+		}
+
+		// ===== RestartPolicy =====
+		if rpData := swarmConfig.RestartPolicySwarm.Data; rpData != nil {
+			var rp schema.RestartPolicySwarm
+			if remarshal(rpData, &rp) == nil {
+				restartPolicy = &swarm.RestartPolicy{}
+				if rp.Condition != nil {
+					cond := swarm.RestartPolicyCondition(*rp.Condition)
+					restartPolicy.Condition = cond
+				}
+				if rp.Delay != nil {
+					d := time.Duration(*rp.Delay)
+					restartPolicy.Delay = &d
+				}
+				if rp.MaxAttempts != nil {
+					ma := uint64(*rp.MaxAttempts)
+					restartPolicy.MaxAttempts = &ma
+				}
+				if rp.Window != nil {
+					d := time.Duration(*rp.Window)
+					restartPolicy.Window = &d
+				}
+			}
+		}
+
+		// ===== Placement =====
+		if psData := swarmConfig.PlacementSwarm.Data; psData != nil {
+			var ps schema.PlacementSwarm
+			if remarshal(psData, &ps) == nil && (len(ps.Constraints) > 0 || len(ps.Preferences) > 0) {
+				placement = &swarm.Placement{Constraints: ps.Constraints}
+				for _, pref := range ps.Preferences {
+					placement.Preferences = append(placement.Preferences, swarm.PlacementPreference{
+						Spread: &swarm.SpreadOver{SpreadDescriptor: pref.Spread.SpreadDescriptor},
+					})
+				}
+				if ps.MaxReplicas != nil {
+					placement.MaxReplicas = uint64(*ps.MaxReplicas)
+				}
+				for _, p := range ps.Platforms {
+					placement.Platforms = append(placement.Platforms, swarm.Platform{
+						Architecture: p.Architecture, OS: p.OS,
+					})
+				}
+			}
+		}
+
+		// ===== Labels =====
+		if lblData := swarmConfig.LabelsSwarm.Data; lblData != nil {
+			var labels schema.LabelsSwarm
+			if remarshal(lblData, &labels) == nil && len(labels) > 0 {
+				containerSpec.Labels = map[string]string(labels)
+			}
+		}
+
+		// ===== Mode =====
+		if modeData := swarmConfig.ModeSwarm.Data; modeData != nil {
+			var sm schema.ServiceModeSwarm
+			if remarshal(modeData, &sm) == nil {
+				if sm.Global != nil {
+					mode = swarm.ServiceMode{Global: &swarm.GlobalService{}}
+				} else if sm.Replicated != nil && sm.Replicated.Replicas != nil {
+					r := uint64(*sm.Replicated.Replicas)
+					mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &r}}
+				} else {
+					r := uint64(swarmConfig.Replicas)
+					mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &r}}
+				}
+			}
+		}
+
+		// ===== UpdateConfig =====
+		if ucData := swarmConfig.UpdateConfigSwarm.Data; ucData != nil {
+			var uc schema.UpdateConfigSwarm
+			if remarshal(ucData, &uc) == nil {
+				updateConfig = &swarm.UpdateConfig{
+					Parallelism: uint64(uc.Parallelism),
+					Order:       uc.Order,
+				}
+				if uc.Delay != nil {
+					updateConfig.Delay = time.Duration(*uc.Delay)
+				}
+				if uc.FailureAction != nil {
+					updateConfig.FailureAction = *uc.FailureAction
+				}
+				if uc.Monitor != nil {
+					updateConfig.Monitor = time.Duration(*uc.Monitor)
+				}
+				if uc.MaxFailureRatio != nil {
+					updateConfig.MaxFailureRatio = float32(*uc.MaxFailureRatio)
+				}
+			}
+		}
+
+		// ===== RollbackConfig =====
+		if rcData := swarmConfig.RollbackConfigSwarm.Data; rcData != nil {
+			var rc schema.UpdateConfigSwarm
+			if remarshal(rcData, &rc) == nil {
+				rollbackConfig = &swarm.UpdateConfig{
+					Parallelism: uint64(rc.Parallelism),
+					Order:       rc.Order,
+				}
+				if rc.Delay != nil {
+					rollbackConfig.Delay = time.Duration(*rc.Delay)
+				}
+				if rc.FailureAction != nil {
+					rollbackConfig.FailureAction = *rc.FailureAction
+				}
+				if rc.Monitor != nil {
+					rollbackConfig.Monitor = time.Duration(*rc.Monitor)
+				}
+				if rc.MaxFailureRatio != nil {
+					rollbackConfig.MaxFailureRatio = float32(*rc.MaxFailureRatio)
+				}
+			}
+		}
+
+		// ===== StopGracePeriod =====
+		if swarmConfig.StopGracePeriodSwarm != nil && *swarmConfig.StopGracePeriodSwarm > 0 {
+			d := time.Duration(*swarmConfig.StopGracePeriodSwarm)
+			containerSpec.StopGracePeriod = &d
+		}
+
+		// ===== Ulimits =====
+		if ulData := swarmConfig.UlimitsSwarm.Data; ulData != nil {
+			var uls schema.UlimitsSwarm
+			if remarshal(ulData, &uls) == nil && len(uls) > 0 {
+				for _, ul := range uls {
+					containerSpec.Ulimits = append(containerSpec.Ulimits, &containertypes.Ulimit{
+						Name: ul.Name,
+						Soft: int64(ul.Soft),
+						Hard: int64(ul.Hard),
+					})
+				}
+			}
+		}
+
+		// ===== Networks =====
+		if netData := swarmConfig.NetworkSwarm.Data; len(netData) > 0 {
+			var nets []schema.NetworkSwarm
+			if remarshal(netData, &nets) == nil && len(nets) > 0 {
+				networks = nil
+				for _, net := range nets {
+					if net.Target != nil && *net.Target != "" {
+						nac := swarm.NetworkAttachmentConfig{Target: *net.Target}
+						if len(net.Aliases) > 0 {
+							nac.Aliases = net.Aliases
+						}
+						if len(net.DriverOpts) > 0 {
+							nac.DriverOpts = net.DriverOpts
+						}
+						networks = append(networks, nac)
+					}
+				}
+			}
+		}
+
+		// ===== EndpointSpec =====
+		if esData := swarmConfig.EndpointSpecSwarm.Data; esData != nil {
+			var es schema.EndpointSpecSwarm
+			if remarshal(esData, &es) == nil && (es.Mode != nil || len(es.Ports) > 0) {
+				endpointSpec = &swarm.EndpointSpec{}
+				if es.Mode != nil && *es.Mode != "" {
+					endpointSpec.Mode = swarm.ResolutionMode(*es.Mode)
+				}
+				for _, port := range es.Ports {
+					pc := swarm.PortConfig{
+						Protocol:    swarm.PortConfigProtocol(safeStrPtr(port.Protocol, "tcp")),
+						PublishMode: swarm.PortConfigPublishMode(safeStrPtr(port.PublishMode, "host")),
+					}
+					if port.TargetPort != nil {
+						pc.TargetPort = uint32(*port.TargetPort)
+					}
+					if port.PublishedPort != nil {
+						pc.PublishedPort = uint32(*port.PublishedPort)
+					}
+					endpointSpec.Ports = append(endpointSpec.Ports, pc)
+				}
+			}
+		}
+	}
+
 	return swarm.ServiceSpec{
 		Annotations: swarm.Annotations{Name: appName},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: containerSpec,
-			Networks: []swarm.NetworkAttachmentConfig{
-				{Target: "dokploy-network"},
-			},
-			Resources: resources,
+			Networks:      networks,
+			RestartPolicy: restartPolicy,
+			Placement:     placement,
+			Resources:     resources,
 		},
-		Mode: swarm.ServiceMode{
-			Replicated: &swarm.ReplicatedService{Replicas: &replicas},
-		},
-		EndpointSpec: &swarm.EndpointSpec{
-			Mode:  swarm.ResolutionModeDNSRR,
-			Ports: ports,
-		},
+		Mode:           mode,
+		UpdateConfig:   updateConfig,
+		RollbackConfig: rollbackConfig,
+		EndpointSpec:   endpointSpec,
 	}
+}
+
+// remarshal 将 interface{} 通过 JSON 重编码转换为目标类型
+// 用于 SwarmConfig 的 JSONField[interface{}] 字段转换为类型化结构体
+func remarshal(src interface{}, dst interface{}) error {
+	data, err := json.Marshal(src)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, dst)
 }
 
 // deployLocalService 本地部署：Docker SDK update-first / create-fallback（与 TS 版完全一致）
@@ -569,45 +912,54 @@ func (s *DatabaseService) deployLocalService(appName string, spec swarm.ServiceS
 	return nil
 }
 
-// deployRemoteService 远程部署：通过 SSH CLI（update-first / create-fallback）
+// deployRemoteService 远程部署：通过 SSH CLI（rm + create 模式）
+// 与 TS 版对齐：TS 版远程数据库也使用 getRemoteDocker(serverId) SSH 隧道 SDK 整体替换 spec。
+// Go 远程无法使用 SDK，因此用 rm + create 确保 spec 完全替换，避免 --env-add 等累积问题。
+// 数据库数据在 volume 中，rm 不会丢失数据。
 func (s *DatabaseService) deployRemoteService(
 	server *schema.Server,
 	appName, dockerImage string,
-	envVars map[string]string,
-	command, extraEnv *string,
+	envVars []string,
+	command *string, args []string,
 	mounts []schema.Mount,
-	memoryLimit, cpuLimit *string,
+	memoryLimit, memoryReservation, cpuLimit, cpuReservation *string,
 	externalPort *int, defaultPort int,
+	swarmConfig *schema.SwarmConfig,
 	emit func(string),
 ) error {
 	conn := sshConnFromServer(server)
 
-	// 构建 create 参数
+	// 构建 create 参数（完整 spec，不使用 update 追加模式）
 	createArgs := []string{"docker", "service", "create",
 		"--name", appName,
-		"--network", "dokploy-network",
-	}
-	// 构建 update 参数
-	updateArgs := []string{"docker", "service", "update", "--force",
-		"--image", dockerImage,
 	}
 
-	// 环境变量
-	for k, v := range envVars {
-		createArgs = append(createArgs, "--env", fmt.Sprintf("%s=%s", k, v))
-		updateArgs = append(updateArgs, "--env-add", fmt.Sprintf("%s=%s", k, v))
-	}
-	if extraEnv != nil && *extraEnv != "" {
-		for _, line := range splitEnvLines(*extraEnv) {
-			line = strings.TrimSpace(line)
-			if line != "" && line[0] != '#' {
-				createArgs = append(createArgs, "--env", line)
-				updateArgs = append(updateArgs, "--env-add", line)
+	// ===== 网络（与 TS 版一致：networkSwarm 优先，否则默认 dokploy-network） =====
+	hasCustomNetwork := false
+	if swarmConfig != nil {
+		if netData := swarmConfig.NetworkSwarm.Data; len(netData) > 0 {
+			var nets []schema.NetworkSwarm
+			if remarshal(netData, &nets) == nil {
+				for _, net := range nets {
+					if net.Target != nil && *net.Target != "" {
+						createArgs = append(createArgs, "--network", *net.Target)
+						hasCustomNetwork = true
+					}
+				}
 			}
 		}
 	}
+	if !hasCustomNetwork {
+		createArgs = append(createArgs, "--network", "dokploy-network")
+	}
 
-	// 挂载
+	// ===== 环境变量 =====
+	for _, env := range envVars {
+		createArgs = append(createArgs, "--env", env)
+	}
+
+	// ===== 挂载（volume/bind/file 三种类型，与 TS 版对齐） =====
+	applicationsPath := "/etc/dokploy/applications"
 	for _, m := range mounts {
 		var mountStr string
 		switch m.Type {
@@ -619,55 +971,255 @@ func (s *DatabaseService) deployRemoteService(
 			if m.HostPath != nil && *m.HostPath != "" {
 				mountStr = fmt.Sprintf("type=bind,source=%s,target=%s", *m.HostPath, m.MountPath)
 			}
+		case schema.MountTypeFile:
+			if m.FilePath != nil {
+				sourcePath := fmt.Sprintf("%s/%s/files/%s", applicationsPath, appName, *m.FilePath)
+				mountStr = fmt.Sprintf("type=bind,source=%s,target=%s", sourcePath, m.MountPath)
+			}
 		}
 		if mountStr != "" {
 			createArgs = append(createArgs, "--mount", mountStr)
-			updateArgs = append(updateArgs, "--mount-add", mountStr)
 		}
 	}
 
-	// 资源限制
+	// ===== 资源限制与预留 =====
 	if memoryLimit != nil && *memoryLimit != "" {
 		createArgs = append(createArgs, "--limit-memory", *memoryLimit)
-		updateArgs = append(updateArgs, "--limit-memory", *memoryLimit)
 	}
 	if cpuLimit != nil && *cpuLimit != "" {
 		createArgs = append(createArgs, "--limit-cpu", *cpuLimit)
-		updateArgs = append(updateArgs, "--limit-cpu", *cpuLimit)
+	}
+	if memoryReservation != nil && *memoryReservation != "" {
+		createArgs = append(createArgs, "--reserve-memory", *memoryReservation)
+	}
+	if cpuReservation != nil && *cpuReservation != "" {
+		createArgs = append(createArgs, "--reserve-cpu", *cpuReservation)
 	}
 
-	// 端口映射
-	if externalPort != nil && *externalPort > 0 {
-		portStr := fmt.Sprintf("published=%d,target=%d,protocol=tcp,mode=host", *externalPort, defaultPort)
-		createArgs = append(createArgs, "--publish", portStr)
-		updateArgs = append(updateArgs, "--publish-add", portStr)
+	// ===== Swarm 配置 CLI flags =====
+	if swarmConfig != nil {
+		// Mode
+		if modeData := swarmConfig.ModeSwarm.Data; modeData != nil {
+			var sm schema.ServiceModeSwarm
+			if remarshal(modeData, &sm) == nil {
+				if sm.Global != nil {
+					createArgs = append(createArgs, "--mode", "global")
+				} else if sm.Replicated != nil && sm.Replicated.Replicas != nil {
+					createArgs = append(createArgs, "--replicas", fmt.Sprintf("%d", *sm.Replicated.Replicas))
+				} else {
+					createArgs = append(createArgs, "--replicas", fmt.Sprintf("%d", swarmConfig.Replicas))
+				}
+			}
+		} else {
+			createArgs = append(createArgs, "--replicas", fmt.Sprintf("%d", swarmConfig.Replicas))
+		}
+
+		// HealthCheck
+		if hcData := swarmConfig.HealthCheckSwarm.Data; hcData != nil {
+			var hc schema.HealthCheckSwarm
+			if remarshal(hcData, &hc) == nil && len(hc.Test) > 0 {
+				if hc.Test[0] == "NONE" {
+					createArgs = append(createArgs, "--no-healthcheck")
+				} else {
+					var healthCmd string
+					if hc.Test[0] == "CMD-SHELL" && len(hc.Test) > 1 {
+						healthCmd = hc.Test[1]
+					} else if hc.Test[0] == "CMD" && len(hc.Test) > 1 {
+						healthCmd = strings.Join(hc.Test[1:], " ")
+					} else {
+						healthCmd = strings.Join(hc.Test, " ")
+					}
+					createArgs = append(createArgs, "--health-cmd", healthCmd)
+				}
+				if hc.Interval != nil {
+					createArgs = append(createArgs, "--health-interval", nsToDuration(*hc.Interval))
+				}
+				if hc.Timeout != nil {
+					createArgs = append(createArgs, "--health-timeout", nsToDuration(*hc.Timeout))
+				}
+				if hc.StartPeriod != nil {
+					createArgs = append(createArgs, "--health-start-period", nsToDuration(*hc.StartPeriod))
+				}
+				if hc.Retries != nil {
+					createArgs = append(createArgs, "--health-retries", fmt.Sprintf("%d", *hc.Retries))
+				}
+			}
+		}
+
+		// RestartPolicy
+		if rpData := swarmConfig.RestartPolicySwarm.Data; rpData != nil {
+			var rp schema.RestartPolicySwarm
+			if remarshal(rpData, &rp) == nil {
+				if rp.Condition != nil && *rp.Condition != "" {
+					createArgs = append(createArgs, "--restart-condition", *rp.Condition)
+				}
+				if rp.Delay != nil {
+					createArgs = append(createArgs, "--restart-delay", nsToDuration(*rp.Delay))
+				}
+				if rp.MaxAttempts != nil {
+					createArgs = append(createArgs, "--restart-max-attempts", fmt.Sprintf("%d", *rp.MaxAttempts))
+				}
+				if rp.Window != nil {
+					createArgs = append(createArgs, "--restart-window", nsToDuration(*rp.Window))
+				}
+			}
+		}
+
+		// Placement
+		if psData := swarmConfig.PlacementSwarm.Data; psData != nil {
+			var ps schema.PlacementSwarm
+			if remarshal(psData, &ps) == nil {
+				for _, c := range ps.Constraints {
+					createArgs = append(createArgs, "--constraint", c)
+				}
+				for _, pref := range ps.Preferences {
+					if pref.Spread.SpreadDescriptor != "" {
+						createArgs = append(createArgs, "--placement-pref", fmt.Sprintf("spread=%s", pref.Spread.SpreadDescriptor))
+					}
+				}
+			}
+		} else if len(mounts) > 0 {
+			createArgs = append(createArgs, "--constraint", "node.role==manager")
+		}
+
+		// UpdateConfig
+		if ucData := swarmConfig.UpdateConfigSwarm.Data; ucData != nil {
+			var uc schema.UpdateConfigSwarm
+			if remarshal(ucData, &uc) == nil {
+				createArgs = append(createArgs, "--update-parallelism", fmt.Sprintf("%d", uc.Parallelism))
+				if uc.Delay != nil {
+					createArgs = append(createArgs, "--update-delay", nsToDuration(*uc.Delay))
+				}
+				if uc.FailureAction != nil && *uc.FailureAction != "" {
+					createArgs = append(createArgs, "--update-failure-action", *uc.FailureAction)
+				}
+				if uc.Monitor != nil {
+					createArgs = append(createArgs, "--update-monitor", nsToDuration(*uc.Monitor))
+				}
+				if uc.MaxFailureRatio != nil {
+					createArgs = append(createArgs, "--update-max-failure-ratio", fmt.Sprintf("%g", *uc.MaxFailureRatio))
+				}
+				if uc.Order != "" {
+					createArgs = append(createArgs, "--update-order", uc.Order)
+				}
+			}
+		} else {
+			createArgs = append(createArgs, "--update-parallelism", "1", "--update-order", "start-first")
+		}
+
+		// RollbackConfig
+		if rcData := swarmConfig.RollbackConfigSwarm.Data; rcData != nil {
+			var rc schema.UpdateConfigSwarm
+			if remarshal(rcData, &rc) == nil {
+				createArgs = append(createArgs, "--rollback-parallelism", fmt.Sprintf("%d", rc.Parallelism))
+				if rc.Delay != nil {
+					createArgs = append(createArgs, "--rollback-delay", nsToDuration(*rc.Delay))
+				}
+				if rc.FailureAction != nil && *rc.FailureAction != "" {
+					createArgs = append(createArgs, "--rollback-failure-action", *rc.FailureAction)
+				}
+				if rc.Monitor != nil {
+					createArgs = append(createArgs, "--rollback-monitor", nsToDuration(*rc.Monitor))
+				}
+				if rc.MaxFailureRatio != nil {
+					createArgs = append(createArgs, "--rollback-max-failure-ratio", fmt.Sprintf("%g", *rc.MaxFailureRatio))
+				}
+				if rc.Order != "" {
+					createArgs = append(createArgs, "--rollback-order", rc.Order)
+				}
+			}
+		}
+
+		// Labels
+		if lblData := swarmConfig.LabelsSwarm.Data; lblData != nil {
+			var labels schema.LabelsSwarm
+			if remarshal(lblData, &labels) == nil {
+				for k, v := range labels {
+					createArgs = append(createArgs, "--container-label", fmt.Sprintf("%s=%s", k, v))
+				}
+			}
+		}
+
+		// StopGracePeriod
+		if swarmConfig.StopGracePeriodSwarm != nil && *swarmConfig.StopGracePeriodSwarm > 0 {
+			createArgs = append(createArgs, "--stop-grace-period", nsToDuration(*swarmConfig.StopGracePeriodSwarm))
+		}
+
+		// Ulimits
+		if ulData := swarmConfig.UlimitsSwarm.Data; ulData != nil {
+			var uls schema.UlimitsSwarm
+			if remarshal(ulData, &uls) == nil {
+				for _, ul := range uls {
+					createArgs = append(createArgs, "--ulimit", fmt.Sprintf("%s=%d:%d", ul.Name, ul.Soft, ul.Hard))
+				}
+			}
+		}
+
+		// EndpointSpec
+		if esData := swarmConfig.EndpointSpecSwarm.Data; esData != nil {
+			var es schema.EndpointSpecSwarm
+			if remarshal(esData, &es) == nil {
+				if es.Mode != nil && *es.Mode != "" {
+					createArgs = append(createArgs, "--endpoint-mode", *es.Mode)
+				}
+				for _, port := range es.Ports {
+					publishMode := "host"
+					if port.PublishMode != nil && *port.PublishMode != "" {
+						publishMode = *port.PublishMode
+					}
+					protocol := "tcp"
+					if port.Protocol != nil && *port.Protocol != "" {
+						protocol = *port.Protocol
+					}
+					targetPort := 0
+					if port.TargetPort != nil {
+						targetPort = *port.TargetPort
+					}
+					publishedPort := 0
+					if port.PublishedPort != nil {
+						publishedPort = *port.PublishedPort
+					}
+					createArgs = append(createArgs, "--publish",
+						fmt.Sprintf("mode=%s,target=%d,published=%d,protocol=%s", publishMode, targetPort, publishedPort, protocol))
+				}
+			}
+		} else {
+			// 默认端口映射
+			if externalPort != nil && *externalPort > 0 {
+				portStr := fmt.Sprintf("published=%d,target=%d,protocol=tcp,mode=host", *externalPort, defaultPort)
+				createArgs = append(createArgs, "--publish", portStr)
+			}
+		}
+	} else {
+		// 无 SwarmConfig 时的默认配置
+		createArgs = append(createArgs, "--replicas", "1",
+			"--update-parallelism", "1", "--update-order", "start-first")
+		if len(mounts) > 0 {
+			createArgs = append(createArgs, "--constraint", "node.role==manager")
+		}
+		if externalPort != nil && *externalPort > 0 {
+			portStr := fmt.Sprintf("published=%d,target=%d,protocol=tcp,mode=host", *externalPort, defaultPort)
+			createArgs = append(createArgs, "--publish", portStr)
+		}
 	}
 
-	// 镜像 (create 时放在最后面，update 已经用 --image 指定)
+	// 镜像 (create 时放在最后面)
 	createArgs = append(createArgs, dockerImage)
 
 	// Command override
 	if command != nil && *command != "" {
 		createArgs = append(createArgs, strings.Fields(*command)...)
-		// update 不支持直接改 CMD，需要 rm+create 回退
+	}
+	// Args（与 TS 版一致：作为 CMD 参数附加在镜像后面）
+	if len(args) > 0 {
+		createArgs = append(createArgs, args...)
 	}
 
-	// update 的 service name
-	updateArgs = append(updateArgs, appName)
-
-	// 先尝试 update
+	// rm + create 模式：先删除旧服务（忽略错误），再创建新服务
 	emit("Deploying service...\n")
-	updateCmd := argsToShellCommand(updateArgs)
-	_, updateErr := process.ExecAsyncRemote(conn, updateCmd, func(line string) { emit(line + "\n") })
-	if updateErr == nil {
-		emit("Service updated successfully!\n")
-		return nil
-	}
-
-	// update 失败 → 尝试 create
-	emit("Service not found, creating new...\n")
 	createCmd := argsToShellCommand(createArgs)
-	_, err := process.ExecAsyncRemote(conn, createCmd, func(line string) { emit(line + "\n") })
+	fullCmd := fmt.Sprintf("docker service rm %s 2>/dev/null; sleep 2; %s", appName, createCmd)
+	_, err := process.ExecAsyncRemote(conn, fullCmd, func(line string) { emit(line + "\n") })
 	if err != nil {
 		emit(fmt.Sprintf("Error: %v\n", err))
 		return err

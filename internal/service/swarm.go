@@ -1,6 +1,6 @@
-// Input: schema.Application, schema.Registry, schema.Mount, schema.Port
-// Output: Docker CLI 命令字符串（docker service create/update 的完整参数）
-// Role: Docker Swarm 服务配置生成器，将数据库中的 JSONB 配置转换为 Docker CLI flags，与 TS 版 mechanizeDockerContainer 完全对齐
+// Input: schema.Application, schema.Registry, schema.Mount, schema.Port, Docker SDK types
+// Output: Docker CLI 命令字符串 + Docker SDK swarm.ServiceSpec（供本地 SDK 部署使用）
+// Role: Docker Swarm 服务配置生成器，将数据库中的 JSONB 配置转换为 Docker CLI flags 和 SDK spec，与 TS 版 mechanizeDockerContainer 完全对齐
 // 自指声明: 本文件更新后，必须同步校准头部注释，并向上冒泡更新所属目录的 README.md
 package service
 
@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	containertypes "github.com/docker/docker/api/types/container"
+	dockermount "github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/swarm"
 	"github.com/dokploy/dokploy/internal/db/schema"
 )
 
@@ -476,4 +479,350 @@ func nsToDuration(ns int64) string {
 // shellEscapeSingleQuote 转义单引号，用于 shell 命令中的值
 func shellEscapeSingleQuote(s string) string {
 	return strings.ReplaceAll(s, "'", "'\\''")
+}
+
+// buildApplicationServiceSpec 构建 Application 的完整 Docker Swarm ServiceSpec（SDK 方式）
+// 与 TS 版 mechanizeDockerContainer + generateConfigContainer 完全对齐：
+// 将所有 Swarm JSONB 字段转换为 Docker SDK 结构体，用于 ServiceCreate/ServiceUpdate
+func buildApplicationServiceSpec(app *schema.Application, imageName string, envVars []string) swarm.ServiceSpec {
+	applicationsPath := "/etc/dokploy/applications"
+
+	// ===== 挂载（volume/bind/file 三种类型，与 TS 版 generateVolumeMounts + generateBindMounts + generateFileMounts 对齐） =====
+	var mountList []dockermount.Mount
+	for _, m := range app.Mounts {
+		switch m.Type {
+		case schema.MountTypeVolume:
+			if m.VolumeName != nil && *m.VolumeName != "" {
+				mountList = append(mountList, dockermount.Mount{
+					Type:   dockermount.TypeVolume,
+					Source: *m.VolumeName,
+					Target: m.MountPath,
+				})
+			}
+		case schema.MountTypeBind:
+			if m.HostPath != nil && *m.HostPath != "" {
+				mountList = append(mountList, dockermount.Mount{
+					Type:   dockermount.TypeBind,
+					Source: *m.HostPath,
+					Target: m.MountPath,
+				})
+			}
+		case schema.MountTypeFile:
+			if m.FilePath != nil {
+				sourcePath := filepath.Join(applicationsPath, app.AppName, "files", *m.FilePath)
+				mountList = append(mountList, dockermount.Mount{
+					Type:   dockermount.TypeBind,
+					Source: sourcePath,
+					Target: m.MountPath,
+				})
+			}
+		}
+	}
+
+	// ===== 资源限制与预留（与 TS 版 calculateResources 对齐） =====
+	var resources *swarm.ResourceRequirements
+	var limits swarm.Limit
+	var reservations swarm.Resources
+	hasLimits := false
+	hasReservations := false
+	if app.MemoryLimit != nil && *app.MemoryLimit != "" {
+		limits.MemoryBytes = parseMemoryString(*app.MemoryLimit)
+		hasLimits = true
+	}
+	if app.CPULimit != nil && *app.CPULimit != "" {
+		limits.NanoCPUs = parseCPUString(*app.CPULimit)
+		hasLimits = true
+	}
+	if app.MemoryReservation != nil && *app.MemoryReservation != "" {
+		reservations.MemoryBytes = parseMemoryString(*app.MemoryReservation)
+		hasReservations = true
+	}
+	if app.CPUReservation != nil && *app.CPUReservation != "" {
+		reservations.NanoCPUs = parseCPUString(*app.CPUReservation)
+		hasReservations = true
+	}
+	if hasLimits || hasReservations {
+		resources = &swarm.ResourceRequirements{}
+		if hasLimits {
+			resources.Limits = &limits
+		}
+		if hasReservations {
+			resources.Reservations = &reservations
+		}
+	}
+
+	// ===== ContainerSpec =====
+	containerSpec := &swarm.ContainerSpec{
+		Image:  imageName,
+		Env:    envVars,
+		Mounts: mountList,
+	}
+
+	// Command（与 TS 版一致：command.split(" ")）
+	if app.Command != nil && *app.Command != "" {
+		containerSpec.Command = strings.Fields(*app.Command)
+	}
+
+	// Args
+	if len(app.Args) > 0 {
+		containerSpec.Args = []string(app.Args)
+	}
+
+	// StopGracePeriod（与 TS 版一致：纳秒转 Duration）
+	if app.StopGracePeriodSwarm != nil && *app.StopGracePeriodSwarm > 0 {
+		d := time.Duration(*app.StopGracePeriodSwarm)
+		containerSpec.StopGracePeriod = &d
+	}
+
+	// HealthCheck（与 TS 版一致：直接使用 JSON 反序列化的结构）
+	if app.HealthCheckSwarm != nil {
+		hc := app.HealthCheckSwarm.Data
+		containerSpec.Healthcheck = &containertypes.HealthConfig{
+			Test: hc.Test,
+		}
+		if hc.Interval != nil {
+			d := time.Duration(*hc.Interval)
+			containerSpec.Healthcheck.Interval = d
+		}
+		if hc.Timeout != nil {
+			d := time.Duration(*hc.Timeout)
+			containerSpec.Healthcheck.Timeout = d
+		}
+		if hc.StartPeriod != nil {
+			d := time.Duration(*hc.StartPeriod)
+			containerSpec.Healthcheck.StartPeriod = d
+		}
+		if hc.Retries != nil {
+			containerSpec.Healthcheck.Retries = *hc.Retries
+		}
+	}
+
+	// Labels
+	if app.LabelsSwarm != nil {
+		containerSpec.Labels = map[string]string(app.LabelsSwarm.Data)
+	}
+
+	// Ulimits
+	if app.UlimitsSwarm != nil && len(app.UlimitsSwarm.Data) > 0 {
+		var ulimits []*containertypes.Ulimit
+		for _, ul := range app.UlimitsSwarm.Data {
+			ulimits = append(ulimits, &containertypes.Ulimit{
+				Name: ul.Name,
+				Soft: int64(ul.Soft),
+				Hard: int64(ul.Hard),
+			})
+		}
+		containerSpec.Ulimits = ulimits
+	}
+
+	// ===== Networks（与 TS 版一致：networkSwarm 优先，否则默认 dokploy-network） =====
+	var networks []swarm.NetworkAttachmentConfig
+	if app.NetworkSwarm != nil && len(app.NetworkSwarm.Data) > 0 {
+		for _, net := range app.NetworkSwarm.Data {
+			if net.Target != nil && *net.Target != "" {
+				nac := swarm.NetworkAttachmentConfig{Target: *net.Target}
+				if len(net.Aliases) > 0 {
+					nac.Aliases = net.Aliases
+				}
+				if len(net.DriverOpts) > 0 {
+					nac.DriverOpts = net.DriverOpts
+				}
+				networks = append(networks, nac)
+			}
+		}
+	} else {
+		networks = []swarm.NetworkAttachmentConfig{{Target: "dokploy-network"}}
+	}
+
+	// ===== RestartPolicy =====
+	var restartPolicy *swarm.RestartPolicy
+	if app.RestartPolicySwarm != nil {
+		rp := app.RestartPolicySwarm.Data
+		restartPolicy = &swarm.RestartPolicy{}
+		if rp.Condition != nil {
+			cond := swarm.RestartPolicyCondition(*rp.Condition)
+			restartPolicy.Condition = cond
+		}
+		if rp.Delay != nil {
+			d := time.Duration(*rp.Delay)
+			restartPolicy.Delay = &d
+		}
+		if rp.MaxAttempts != nil {
+			ma := uint64(*rp.MaxAttempts)
+			restartPolicy.MaxAttempts = &ma
+		}
+		if rp.Window != nil {
+			d := time.Duration(*rp.Window)
+			restartPolicy.Window = &d
+		}
+	}
+
+	// ===== Placement（与 TS 版一致：有 placementSwarm 用自定义，否则有挂载时默认 manager） =====
+	var placement *swarm.Placement
+	if app.PlacementSwarm != nil {
+		ps := app.PlacementSwarm.Data
+		placement = &swarm.Placement{
+			Constraints: ps.Constraints,
+		}
+		if len(ps.Preferences) > 0 {
+			for _, pref := range ps.Preferences {
+				placement.Preferences = append(placement.Preferences, swarm.PlacementPreference{
+					Spread: &swarm.SpreadOver{SpreadDescriptor: pref.Spread.SpreadDescriptor},
+				})
+			}
+		}
+		if ps.MaxReplicas != nil {
+			placement.MaxReplicas = uint64(*ps.MaxReplicas)
+		}
+		if len(ps.Platforms) > 0 {
+			for _, p := range ps.Platforms {
+				placement.Platforms = append(placement.Platforms, swarm.Platform{
+					Architecture: p.Architecture,
+					OS:           p.OS,
+				})
+			}
+		}
+	} else if len(app.Mounts) > 0 {
+		placement = &swarm.Placement{Constraints: []string{"node.role==manager"}}
+	} else {
+		placement = &swarm.Placement{Constraints: []string{}}
+	}
+
+	// ===== Mode（与 TS 版一致：modeSwarm 优先，否则使用 replicas 字段） =====
+	var mode swarm.ServiceMode
+	if app.ModeSwarm != nil {
+		m := app.ModeSwarm.Data
+		if m.Global != nil {
+			mode.Global = &swarm.GlobalService{}
+		} else if m.Replicated != nil && m.Replicated.Replicas != nil {
+			r := uint64(*m.Replicated.Replicas)
+			mode.Replicated = &swarm.ReplicatedService{Replicas: &r}
+		} else {
+			r := uint64(app.Replicas)
+			mode.Replicated = &swarm.ReplicatedService{Replicas: &r}
+		}
+	} else {
+		r := uint64(app.Replicas)
+		mode.Replicated = &swarm.ReplicatedService{Replicas: &r}
+	}
+
+	// ===== UpdateConfig（与 TS 版一致：有自定义配置用自定义，否则默认 parallelism=1, order=start-first） =====
+	var updateConfig *swarm.UpdateConfig
+	if app.UpdateConfigSwarm != nil {
+		uc := app.UpdateConfigSwarm.Data
+		updateConfig = &swarm.UpdateConfig{
+			Parallelism: uint64(uc.Parallelism),
+			Order:       uc.Order,
+		}
+		if uc.Delay != nil {
+			updateConfig.Delay = time.Duration(*uc.Delay)
+		}
+		if uc.FailureAction != nil {
+			updateConfig.FailureAction = *uc.FailureAction
+		}
+		if uc.Monitor != nil {
+			updateConfig.Monitor = time.Duration(*uc.Monitor)
+		}
+		if uc.MaxFailureRatio != nil {
+			updateConfig.MaxFailureRatio = float32(*uc.MaxFailureRatio)
+		}
+	} else {
+		updateConfig = &swarm.UpdateConfig{
+			Parallelism: 1,
+			Order:       "start-first",
+		}
+	}
+
+	// ===== RollbackConfig =====
+	var rollbackConfig *swarm.UpdateConfig
+	if app.RollbackConfigSwarm != nil {
+		rc := app.RollbackConfigSwarm.Data
+		rollbackConfig = &swarm.UpdateConfig{
+			Parallelism: uint64(rc.Parallelism),
+			Order:       rc.Order,
+		}
+		if rc.Delay != nil {
+			rollbackConfig.Delay = time.Duration(*rc.Delay)
+		}
+		if rc.FailureAction != nil {
+			rollbackConfig.FailureAction = *rc.FailureAction
+		}
+		if rc.Monitor != nil {
+			rollbackConfig.Monitor = time.Duration(*rc.Monitor)
+		}
+		if rc.MaxFailureRatio != nil {
+			rollbackConfig.MaxFailureRatio = float32(*rc.MaxFailureRatio)
+		}
+	}
+
+	// ===== EndpointSpec（与 TS 版一致：endpointSpecSwarm 优先，否则使用 Ports 关系） =====
+	var endpointSpec *swarm.EndpointSpec
+	if app.EndpointSpecSwarm != nil {
+		es := app.EndpointSpecSwarm.Data
+		endpointSpec = &swarm.EndpointSpec{}
+		if es.Mode != nil && *es.Mode != "" {
+			endpointSpec.Mode = swarm.ResolutionMode(*es.Mode)
+		}
+		for _, port := range es.Ports {
+			pc := swarm.PortConfig{
+				Protocol:    swarm.PortConfigProtocol(safeStrPtr(port.Protocol, "tcp")),
+				PublishMode: swarm.PortConfigPublishMode(safeStrPtr(port.PublishMode, "host")),
+			}
+			if port.TargetPort != nil {
+				pc.TargetPort = uint32(*port.TargetPort)
+			}
+			if port.PublishedPort != nil {
+				pc.PublishedPort = uint32(*port.PublishedPort)
+			}
+			endpointSpec.Ports = append(endpointSpec.Ports, pc)
+		}
+	} else if len(app.Ports) > 0 {
+		endpointSpec = &swarm.EndpointSpec{}
+		for _, port := range app.Ports {
+			endpointSpec.Ports = append(endpointSpec.Ports, swarm.PortConfig{
+				Protocol:      swarm.PortConfigProtocol(port.Protocol),
+				TargetPort:    uint32(port.TargetPort),
+				PublishedPort: uint32(port.PublishedPort),
+				PublishMode:   swarm.PortConfigPublishModeHost,
+			})
+		}
+	}
+
+	spec := swarm.ServiceSpec{
+		Annotations: swarm.Annotations{Name: app.AppName},
+		TaskTemplate: swarm.TaskSpec{
+			ContainerSpec: containerSpec,
+			Networks:      networks,
+			RestartPolicy: restartPolicy,
+			Placement:     placement,
+			Resources:     resources,
+		},
+		Mode:           mode,
+		UpdateConfig:   updateConfig,
+		RollbackConfig: rollbackConfig,
+		EndpointSpec:   endpointSpec,
+	}
+
+	return spec
+}
+
+// safeStrPtr 安全获取指针字符串值，为 nil 或空时返回默认值
+func safeStrPtr(s *string, defaultVal string) string {
+	if s != nil && *s != "" {
+		return *s
+	}
+	return defaultVal
+}
+
+// getSDKAuthConfig 将 registry 认证信息转换为 Docker SDK 使用的 AuthConfig
+func getSDKAuthConfig(app *schema.Application) map[string]string {
+	username, password, serverAddr, hasAuth := getAuthConfig(app)
+	if !hasAuth {
+		return nil
+	}
+	return map[string]string{
+		"username":      username,
+		"password":      password,
+		"serveraddress": serverAddr,
+	}
 }

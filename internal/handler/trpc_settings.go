@@ -1073,7 +1073,35 @@ with open('/etc/docker/daemon.json','w') as f: json.dump(d,f,indent=2)
 }
 
 // execDockerCleanup runs a docker cleanup command locally or on a remote server via SSH.
+// dockerSafeExec 包装 Docker 命令，等待 Docker 空闲后再执行
+// 与 TS 版 dockerSafeExec 完全对齐：轮询 ps aux 检测 docker 进程，空闲后执行
+func dockerSafeExec(cmd string) string {
+	return fmt.Sprintf(`
+CHECK_INTERVAL=10
+
+echo "Preparing for execution..."
+
+while true; do
+    PROCESSES=$(ps aux | grep -E "^.*docker [A-Za-z]" | grep -v grep)
+
+    if [ -z "$PROCESSES" ]; then
+        echo "Docker is idle. Starting execution..."
+        break
+    else
+        echo "Docker is busy. Will check again in $CHECK_INTERVAL seconds..."
+        sleep $CHECK_INTERVAL
+    fi
+done
+
+%s
+
+echo "Execution completed."
+`, cmd)
+}
+
 func (h *Handler) execDockerCleanup(serverID *string, command string) {
+	// 与 TS 版一致：所有清理命令包裹在 dockerSafeExec 中，等待 Docker 空闲后执行
+	safeCmd := dockerSafeExec(command)
 	if serverID != nil && *serverID != "" {
 		var srv schema.Server
 		if err := h.DB.Preload("SSHKey").First(&srv, "\"serverId\" = ?", *serverID).Error; err != nil {
@@ -1090,12 +1118,12 @@ func (h *Handler) execDockerCleanup(serverID *string, command string) {
 			Username:   srv.Username,
 			PrivateKey: srv.SSHKey.PrivateKey,
 		}
-		_, err := process.ExecAsyncRemote(conn, command, nil)
+		_, err := process.ExecAsyncRemote(conn, safeCmd, nil)
 		if err != nil {
 			log.Printf("[Docker Cleanup] Remote exec failed on %s: %v", *serverID, err)
 		}
 	} else {
-		cmd := exec.Command("bash", "-c", command)
+		cmd := exec.Command("bash", "-c", safeCmd)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			log.Printf("[Docker Cleanup] Local exec failed: %v: %s", err, string(output))
 		}

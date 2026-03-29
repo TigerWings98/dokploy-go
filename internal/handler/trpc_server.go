@@ -78,13 +78,22 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		serverID, _ := in["serverId"].(string)
-		delete(in, "serverId")
-		in = h.filterColumns(&schema.Server{}, in)
+
+		// 与 TS 版 apiUpdateServer.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"name": true, "description": true, "ipAddress": true, "port": true,
+			"username": true, "sshKeyId": true, "serverType": true, "command": true,
+		})
+
 		var server schema.Server
 		if err := h.DB.First(&server, "\"serverId\" = ?", serverID).Error; err != nil {
 			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
 		}
-		h.DB.Model(&server).Updates(in)
+		if len(updates) > 0 {
+			h.DB.Model(&server).Updates(updates)
+		}
+		// 重新查询以返回更新后的数据
+		h.DB.First(&server, "\"serverId\" = ?", serverID)
 		return server, nil
 	}
 

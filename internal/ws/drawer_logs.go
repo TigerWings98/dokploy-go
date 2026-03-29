@@ -417,16 +417,22 @@ func (h *Handler) handleBackupRestore(input json.RawMessage, emit func(string) b
 }
 
 // handleVolumeBackupRestore 处理卷备份恢复。
+// 与 TS 版一致：直接接收所有参数（destinationId, volumeName, backupFileName, id, serviceType, serverId），
+// 不查 VolumeBackup 记录。
 func (h *Handler) handleVolumeBackupRestore(input json.RawMessage, emit func(string) bool, done chan struct{}) {
 	var in struct {
-		VolumeBackupID string `json:"volumeBackupId"`
-		FileName       string `json:"fileName"`
+		ID             string `json:"id"`
+		ServiceType    string `json:"serviceType"`
+		ServerID       string `json:"serverId"`
+		DestinationID  string `json:"destinationId"`
+		VolumeName     string `json:"volumeName"`
+		BackupFileName string `json:"backupFileName"`
 	}
 	json.Unmarshal(input, &in)
 
 	emit(fmt.Sprintf("\nRestoring volume backup: 🔄\n"))
-	emit(fmt.Sprintf("Volume backup ID: %s\n", in.VolumeBackupID))
-	emit(fmt.Sprintf("File: %s\n", in.FileName))
+	emit(fmt.Sprintf("Volume: %s\n", in.VolumeName))
+	emit(fmt.Sprintf("File: %s\n", in.BackupFileName))
 
 	if h.BackupSvc == nil {
 		emit("Error: backup service not available\n")
@@ -435,10 +441,11 @@ func (h *Handler) handleVolumeBackupRestore(input json.RawMessage, emit func(str
 
 	// BackupSvc 需要实现 RestoreVolumeBackup 接口
 	type volumeRestorer interface {
-		RestoreVolumeBackup(volumeBackupID string, filename string) error
+		RestoreVolumeBackup(destinationID, volumeName, backupFileName, serviceID, serviceType, serverID string, onData func(string)) error
 	}
 	if vr, ok := h.BackupSvc.(volumeRestorer); ok {
-		if err := vr.RestoreVolumeBackup(in.VolumeBackupID, in.FileName); err != nil {
+		onData := func(data string) { emit(data + "\n") }
+		if err := vr.RestoreVolumeBackup(in.DestinationID, in.VolumeName, in.BackupFileName, in.ID, in.ServiceType, in.ServerID, onData); err != nil {
 			emit(fmt.Sprintf("Error: %s\n", err.Error()))
 			return
 		}

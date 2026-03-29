@@ -143,8 +143,11 @@ func (h *Handler) registerApplicationTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		appID, _ := in["applicationId"].(string)
 		delete(in, "applicationId")
-		// 与 TS 版一致：禁止修改 serverId
+		// 与 TS 版 apiUpdateApplication.omit({serverId}) 一致：禁止修改 serverId
 		delete(in, "serverId")
+		// 排除自动生成的不可变字段
+		delete(in, "createdAt")
+		delete(in, "organizationId")
 		// 过滤不属于 application 表的字段（前端可能发送 composeId/mongoId 等无关 ID）
 		in = h.filterColumns(&schema.Application{}, in)
 

@@ -120,14 +120,21 @@ func (h *Handler) registerSSHKeyTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["sshKeyId"].(string)
-		delete(in, "sshKeyId")
-		in = h.filterColumns(&schema.SSHKey{}, in)
+
+		// 与 TS 版 apiUpdateSshKey.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"name": true, "description": true, "lastUsedAt": true,
+		})
 
 		var key schema.SSHKey
 		if err := h.DB.First(&key, "\"sshKeyId\" = ?", id).Error; err != nil {
 			return nil, &trpcErr{"SSH Key not found", "NOT_FOUND", 404}
 		}
-		h.DB.Model(&key).Updates(in)
+		if len(updates) > 0 {
+			h.DB.Model(&key).Updates(updates)
+		}
+		// 重新查询以返回更新后的数据
+		h.DB.First(&key, "\"sshKeyId\" = ?", id)
 		return key, nil
 	}
 }

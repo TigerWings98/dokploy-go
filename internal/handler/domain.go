@@ -135,8 +135,15 @@ func (h *Handler) DeleteDomain(c echo.Context) error {
 }
 
 // generateTraefikForDomain creates/updates Traefik config for a domain.
+// Compose 域名使用 Docker 标签注入（在部署时通过 addDomainToCompose 注入），
+// 不生成文件级 Traefik 配置，因为 compose service 的 DNS 名称与 appName 不同。
 func (h *Handler) generateTraefikForDomain(domain *schema.Domain) {
 	if h.Traefik == nil {
+		return
+	}
+
+	// Compose 域名通过 Docker 标签路由，跳过文件配置生成
+	if domain.ComposeID != nil {
 		return
 	}
 

@@ -410,6 +410,13 @@ func (s *ComposeService) buildAndRunRemoteCompose(conn process.SSHConnection, co
 		}
 	}
 
+	// 注入 Traefik Docker 标签到 compose YAML 内容（与 TS 版 addDomainToCompose 一致）
+	if injected, err := s.injectTraefikLabelsToComposeContent(compose, composeContent); err == nil {
+		composeContent = injected
+	} else {
+		writeLog(fmt.Sprintf("Warning: failed to inject traefik labels: %v", err))
+	}
+
 	// 与 TS 版 writeDomainsToCompose 一致：将转换后的 compose 内容编码为 base64 写回命令
 	encodedCompose := base64Encode(string(composeContent))
 	writeComposeCmd := fmt.Sprintf(`echo "%s" | base64 -d > "%s";`, encodedCompose, remoteComposeFile)
@@ -548,6 +555,10 @@ func (s *ComposeService) composeUpLocal(compose *schema.Compose, composeDir stri
 	// 非隔离部署：加入共享 dokploy-network（external: true）
 	// 隔离部署：加入以 appName 命名的独立网络
 	s.injectNetworkToComposeFile(compose, composeDir, writeLog)
+
+	// 注入 Traefik Docker 标签（与 TS 版 addDomainToCompose 一致）
+	// 将域名路由规则通过 Docker 标签注入到 compose 文件，Traefik Docker provider 自动发现
+	s.injectTraefikLabelsToComposeFile(compose, composeDir, writeLog)
 
 	// 隔离部署：创建独立网络（stack 使用 overlay 驱动）
 	if compose.IsolatedDeployment {
@@ -926,6 +937,205 @@ func (s *ComposeService) sshConn(server *schema.Server) process.SSHConnection {
 		Username:   server.Username,
 		PrivateKey: server.SSHKey.PrivateKey,
 	}
+}
+
+// --- Traefik Docker 标签注入（与 TS 版 addDomainToCompose + createDomainLabels 一致） ---
+
+// injectTraefikLabelsToComposeFile 注入 Traefik Docker 标签到本地 compose 文件
+// 与 TS 版 addDomainToCompose 一致：查询域名 → 生成标签 → 注入到 compose YAML
+func (s *ComposeService) injectTraefikLabelsToComposeFile(compose *schema.Compose, composeDir string, writeLog func(string)) {
+	labelSets := s.buildTraefikLabelSets(compose)
+	if len(labelSets) == 0 {
+		return
+	}
+
+	composePth := compose.ComposePath
+	if composePth == "" || compose.SourceType == schema.SourceTypeComposeRaw {
+		composePth = "docker-compose.yml"
+	}
+	composeFilePath := filepath.Join(composeDir, composePth)
+
+	data, err := os.ReadFile(composeFilePath)
+	if err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to read compose file for traefik labels: %v", err))
+		}
+		return
+	}
+
+	result, err := composepkg.InjectTraefikLabels(data, labelSets, string(compose.ComposeType))
+	if err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to inject traefik labels: %v", err))
+		}
+		return
+	}
+
+	if err := os.WriteFile(composeFilePath, result, 0644); err != nil {
+		if writeLog != nil {
+			writeLog(fmt.Sprintf("Warning: failed to write compose file with traefik labels: %v", err))
+		}
+		return
+	}
+	if writeLog != nil {
+		writeLog("Injected Traefik routing labels into compose file ✅")
+	}
+}
+
+// injectTraefikLabelsToComposeContent 注入 Traefik Docker 标签到 compose YAML 内容（用于远程部署）
+func (s *ComposeService) injectTraefikLabelsToComposeContent(compose *schema.Compose, content []byte) ([]byte, error) {
+	labelSets := s.buildTraefikLabelSets(compose)
+	if len(labelSets) == 0 {
+		return content, nil
+	}
+	return composepkg.InjectTraefikLabels(content, labelSets, string(compose.ComposeType))
+}
+
+// buildTraefikLabelSets 为 compose 的所有域名生成 Traefik Docker 标签集
+// 与 TS 版 addDomainToCompose 中的标签生成逻辑一致
+func (s *ComposeService) buildTraefikLabelSets(compose *schema.Compose) []composepkg.ServiceTraefikLabels {
+	if len(compose.Domains) == 0 {
+		return nil
+	}
+
+	labelsByService := make(map[string][]string)
+
+	for _, domain := range compose.Domains {
+		if domain.ServiceName == nil || *domain.ServiceName == "" {
+			continue
+		}
+		serviceName := *domain.ServiceName
+
+		// 生成 HTTP (web entrypoint) 标签
+		httpLabels := createComposeDomainLabels(compose.AppName, domain, "web")
+		labelsByService[serviceName] = append(labelsByService[serviceName], httpLabels...)
+
+		// HTTPS 时生成 websecure 标签
+		if domain.HTTPS {
+			httpsLabels := createComposeDomainLabels(compose.AppName, domain, "websecure")
+			labelsByService[serviceName] = append(labelsByService[serviceName], httpsLabels...)
+		}
+	}
+
+	// 为每个 service 添加 traefik.enable=true 和网络标签
+	var result []composepkg.ServiceTraefikLabels
+	for svcName, labels := range labelsByService {
+		// 与 TS 版一致：traefik.enable=true 放在最前面
+		if !labelContains(labels, "traefik.enable=true") {
+			labels = append([]string{"traefik.enable=true"}, labels...)
+		}
+
+		// 网络标签（非隔离部署时添加）
+		if !compose.IsolatedDeployment {
+			if compose.ComposeType == schema.ComposeTypeDocker {
+				networkLabel := "traefik.docker.network=dokploy-network"
+				if !labelContains(labels, networkLabel) {
+					labels = append([]string{networkLabel}, labels...)
+				}
+			} else {
+				networkLabel := "traefik.swarm.network=dokploy-network"
+				if !labelContains(labels, networkLabel) {
+					labels = append([]string{networkLabel}, labels...)
+				}
+			}
+		}
+
+		result = append(result, composepkg.ServiceTraefikLabels{
+			ServiceName: svcName,
+			Labels:      labels,
+		})
+	}
+	return result
+}
+
+// createComposeDomainLabels 为单个域名生成 Traefik Docker 标签
+// 与 TS 版 createDomainLabels 完全一致
+func createComposeDomainLabels(appName string, domain schema.Domain, entrypoint string) []string {
+	key := 0
+	if domain.UniqueConfigKey != nil {
+		key = *domain.UniqueConfigKey
+	}
+
+	port := 3000
+	if domain.Port != nil {
+		port = *domain.Port
+	}
+
+	pathStr := "/"
+	if domain.Path != nil && *domain.Path != "" {
+		pathStr = *domain.Path
+	}
+
+	routerName := fmt.Sprintf("%s-%d-%s", appName, key, entrypoint)
+
+	// 构建路由规则
+	rule := fmt.Sprintf("Host(`%s`)", domain.Host)
+	if pathStr != "/" {
+		rule += fmt.Sprintf(" && PathPrefix(`%s`)", pathStr)
+	}
+
+	labels := []string{
+		fmt.Sprintf("traefik.http.routers.%s.rule=%s", routerName, rule),
+		fmt.Sprintf("traefik.http.routers.%s.entrypoints=%s", routerName, entrypoint),
+		fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port=%d", routerName, port),
+		fmt.Sprintf("traefik.http.routers.%s.service=%s", routerName, routerName),
+	}
+
+	// 收集中间件
+	var middlewares []string
+
+	// HTTPS 重定向（仅 web entrypoint）
+	if entrypoint == "web" && domain.HTTPS {
+		middlewares = append(middlewares, "redirect-to-https@file")
+	}
+
+	// stripPath 中间件
+	if domain.StripPath && pathStr != "/" {
+		middlewareName := fmt.Sprintf("stripprefix-%s-%d", appName, key)
+		// 仅在 web entrypoint 定义中间件（避免重复）
+		if entrypoint == "web" {
+			labels = append(labels, fmt.Sprintf("traefik.http.middlewares.%s.stripprefix.prefixes=%s", middlewareName, pathStr))
+		}
+		middlewares = append(middlewares, middlewareName)
+	}
+
+	// internalPath/addPrefix 中间件
+	internalPath := "/"
+	if domain.InternalPath != nil {
+		internalPath = *domain.InternalPath
+	}
+	if internalPath != "/" && strings.HasPrefix(internalPath, "/") {
+		middlewareName := fmt.Sprintf("addprefix-%s-%d", appName, key)
+		if entrypoint == "web" {
+			labels = append(labels, fmt.Sprintf("traefik.http.middlewares.%s.addprefix.prefix=%s", middlewareName, internalPath))
+		}
+		middlewares = append(middlewares, middlewareName)
+	}
+
+	// 应用中间件到路由
+	if len(middlewares) > 0 {
+		labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.middlewares=%s", routerName, strings.Join(middlewares, ",")))
+	}
+
+	// TLS 配置（仅 websecure entrypoint）
+	if entrypoint == "websecure" {
+		if domain.CertificateType == schema.CertificateTypeLetsencrypt {
+			labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.tls.certresolver=letsencrypt", routerName))
+		} else if domain.CertificateType == schema.CertificateTypeCustom && domain.CustomCertResolver != nil {
+			labels = append(labels, fmt.Sprintf("traefik.http.routers.%s.tls.certresolver=%s", routerName, *domain.CustomCertResolver))
+		}
+	}
+
+	return labels
+}
+
+func labelContains(labels []string, target string) bool {
+	for _, l := range labels {
+		if l == target {
+			return true
+		}
+	}
+	return false
 }
 
 // base64Encode 将字符串 base64 编码（用于通过 SSH 安全传输文件内容）

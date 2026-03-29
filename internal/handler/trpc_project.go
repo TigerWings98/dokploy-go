@@ -400,14 +400,21 @@ func (h *Handler) registerProjectTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["environmentId"].(string)
-		delete(in, "environmentId")
-		in = h.filterColumns(&schema.Environment{}, in)
+
+		// 与 TS 版 apiUpdateEnvironment 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"name": true, "description": true, "projectId": true, "env": true,
+		})
 
 		var env schema.Environment
 		if err := h.DB.First(&env, "\"environmentId\" = ?", id).Error; err != nil {
 			return nil, &trpcErr{"Environment not found", "NOT_FOUND", 404}
 		}
-		h.DB.Model(&env).Updates(in)
+		if len(updates) > 0 {
+			h.DB.Model(&env).Updates(updates)
+		}
+		// 重新查询以返回更新后的数据
+		h.DB.First(&env, "\"environmentId\" = ?", id)
 		return env, nil
 	}
 

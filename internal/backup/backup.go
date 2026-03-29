@@ -574,6 +574,9 @@ rclone copyto %s "$TMPDIR/%s" "%s"
 }
 
 // RunVolumeBackup executes a volume backup for the given volume backup configuration.
+// 与 TS 版 backupVolume 一致：生成包含 tar + rclone + cleanup 的完整 shell 脚本，
+// 整体在本地或远程执行（远程时 rclone 也在远程服务器上运行）。
+// 创建 Deployment 记录并将日志输出写入日志文件。
 func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 	var vb schema.VolumeBackup
 	if err := s.db.
@@ -588,10 +591,25 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 		return fmt.Errorf("volume backup not found: %w", err)
 	}
 
-	// 使用 defer 在出错时发送卷备份失败通知（与 TS v0.28.5 对齐，包裹在 try-catch 中防止级联失败）
+	// 创建 Deployment 记录（与数据库备份 createBackupDeployment 一致）
+	deployment := s.createVolumeBackupDeployment(&vb)
+
+	// 使用 defer 在出错时发送卷备份失败通知
 	var volumeErr error
 	defer func() {
 		if volumeErr != nil {
+			// 更新 deployment 状态为 error
+			if deployment != nil {
+				now := time.Now().UTC().Format(time.RFC3339)
+				errMsg := volumeErr.Error()
+				s.db.Model(&schema.Deployment{}).
+					Where("\"deploymentId\" = ?", deployment.DeploymentID).
+					Updates(map[string]interface{}{
+						"status":       schema.DeploymentStatusError,
+						"errorMessage": errMsg,
+						"finishedAt":   now,
+					})
+			}
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -608,63 +626,204 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 		return volumeErr
 	}
 
-	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05")
-	filename := fmt.Sprintf("%s-%s.tar", vb.AppName, timestamp)
-	backupDir := filepath.Join("/tmp/dokploy-volume-backups", vb.AppName)
-	os.MkdirAll(backupDir, 0755)
-	backupPath := filepath.Join(backupDir, filename)
-
-	// Backup the Docker volume to a tar file
-	backupCmd := fmt.Sprintf(
-		"docker run --rm -v %s:/volume -v %s:/backup alpine tar cf /backup/%s -C /volume .",
-		vb.VolumeName, backupDir, filename,
-	)
-
+	// 判断是否远程服务器
 	var server *schema.Server
 	if vb.Application != nil && vb.Application.Server != nil {
 		server = vb.Application.Server
 	} else if vb.Compose != nil && vb.Compose.Server != nil {
 		server = vb.Compose.Server
 	}
+	isRemote := server != nil && server.SSHKey != nil
 
-	if server != nil && server.SSHKey != nil {
+	// 与 TS 版一致：使用 /etc/dokploy/volume-backups 路径
+	volumeBackupsPath := s.cfg.Paths.VolumeBackupsPath
+	volumeBackupLockPath := s.cfg.Paths.VolumeBackupLockPath
+
+	// 与 TS 版一致：文件名使用 volumeName-timestamp.tar
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	backupFileName := fmt.Sprintf("%s-%s.tar", vb.VolumeName, timestamp)
+	volumeBackupPath := filepath.Join(volumeBackupsPath, vb.AppName)
+
+	// S3 目标路径
+	dest := vb.Destination
+	rcloneFlags := getRcloneFlags(dest)
+	s3AppName := getVolumeServiceAppName(&vb)
+	prefix := normalizeS3Path(vb.Prefix)
+	rcloneDestination := fmt.Sprintf(":s3:%s/%s/%s%s", dest.Bucket, s3AppName, prefix, backupFileName)
+	rcloneCommand := fmt.Sprintf(`rclone copyto %s "%s/%s" "%s"`, rcloneFlags, volumeBackupPath, backupFileName, rcloneDestination)
+
+	// 与 TS 版 backupVolume 完全一致：生成完整 shell 脚本（tar + rclone + cleanup）
+	baseCommand := fmt.Sprintf(`
+echo "Volume name: %s"
+echo "Backup file name: %s"
+echo "Turning off volume backup: %s"
+echo "Starting volume backup"
+echo "Dir: %s"
+mkdir -p "%s"
+docker run --rm -v %s:/volume_data -v %s:/backup ubuntu bash -c "cd /volume_data && tar cvf /backup/%s ."
+echo "Volume backup done"
+echo "Starting upload to S3..."
+%s
+echo "Upload to S3 done"
+echo "Cleaning up local backup file..."
+rm -f "%s/%s"
+echo "Local backup file cleaned up"
+`,
+		vb.VolumeName, backupFileName,
+		func() string {
+			if vb.TurnOff {
+				return "Yes"
+			}
+			return "No"
+		}(),
+		volumeBackupPath, volumeBackupPath,
+		vb.VolumeName, volumeBackupPath, backupFileName,
+		rcloneCommand,
+		volumeBackupPath, backupFileName,
+	)
+
+	// 构建最终脚本：根据 turnOff 设置决定是否停止/启动服务
+	var script string
+	if !vb.TurnOff {
+		script = fmt.Sprintf("set -e\n%s", baseCommand)
+	} else {
+		// turnOff=true：停止服务 → 备份 → 重启服务，使用文件锁防止并发
+		serviceLockID := ""
+		if vb.ServiceType == "application" {
+			if vb.Application != nil {
+				serviceLockID = vb.Application.AppName
+			}
+		} else {
+			composeAppName := ""
+			if vb.Compose != nil {
+				composeAppName = vb.Compose.AppName
+			}
+			svcName := ""
+			if vb.ServiceName != nil {
+				svcName = *vb.ServiceName
+			}
+			serviceLockID = composeAppName + "_" + svcName
+		}
+		lockPath := fmt.Sprintf("%s-%s", volumeBackupLockPath, serviceLockID)
+
+		var stopCommand, startCommand string
+		if vb.ServiceType == "application" {
+			appName := vb.AppName
+			if vb.Application != nil {
+				appName = vb.Application.AppName
+			}
+			stopCommand = fmt.Sprintf(`
+echo "Stopping application to 0 replicas"
+ACTUAL_REPLICAS=$(docker service inspect %s --format "{{.Spec.Mode.Replicated.Replicas}}")
+echo "Actual replicas: $ACTUAL_REPLICAS"
+docker service update --replicas=0 %s`, appName, appName)
+			startCommand = fmt.Sprintf(`
+echo "Starting application to $ACTUAL_REPLICAS replicas"
+docker service update --replicas=$ACTUAL_REPLICAS --with-registry-auth %s`, appName)
+		} else if vb.ServiceType == "compose" && vb.Compose != nil {
+			svcName := ""
+			if vb.ServiceName != nil {
+				svcName = *vb.ServiceName
+			}
+			if vb.Compose.ComposeType == schema.ComposeTypeStack {
+				fullSvcName := fmt.Sprintf("%s_%s", vb.Compose.AppName, svcName)
+				stopCommand = fmt.Sprintf(`
+echo "Stopping compose to 0 replicas"
+echo "Service name: %s"
+ACTUAL_REPLICAS=$(docker service inspect %s --format "{{.Spec.Mode.Replicated.Replicas}}")
+echo "Actual replicas: $ACTUAL_REPLICAS"
+docker service update --replicas=0 %s`, fullSvcName, fullSvcName, fullSvcName)
+				startCommand = fmt.Sprintf(`
+echo "Starting compose to $ACTUAL_REPLICAS replicas"
+docker service update --replicas=$ACTUAL_REPLICAS --with-registry-auth %s`, fullSvcName)
+			} else {
+				stopCommand = fmt.Sprintf(`
+echo "Stopping compose container"
+ID=$(docker ps -q --filter "label=com.docker.compose.project=%s" --filter "label=com.docker.compose.service=%s")
+if [ -z "$ID" ]; then
+  echo "No running container found, skipping stop"
+else
+  echo "Stopping container: $ID"
+  docker stop $ID
+fi`, vb.Compose.AppName, svcName)
+				startCommand = `
+echo "Starting compose container"
+if [ -n "$ID" ]; then
+  docker start $ID
+  echo "Compose container started"
+else
+  echo "No container to restart, skipping start"
+fi`
+			}
+		}
+
+		// 与 TS 版 lockWrapper 一致：使用 flock 或 mkdir 回退实现文件锁
+		script = fmt.Sprintf(`
+set -e
+LOCK_PATH="%s"
+echo "Waiting for volume backup lock: $LOCK_PATH"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK_PATH"
+  flock 9
+else
+  LOCK_DIR="$LOCK_PATH.dir"
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    echo "Waiting for volume backup lock: $LOCK_PATH"
+    sleep 5
+  done
+  trap 'rm -rf "$LOCK_DIR"' EXIT
+fi
+echo "Volume backup lock acquired"
+%s
+%s
+%s
+echo "Volume backup lock released"
+`, lockPath, stopCommand, baseCommand, startCommand)
+	}
+
+	// 准备日志写入（Deployment 日志文件）
+	var writeLog func(string)
+	if deployment != nil {
+		logFile, err := os.OpenFile(deployment.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer logFile.Close()
+			writeLog = func(msg string) {
+				logFile.WriteString(msg + "\n")
+			}
+		}
+	}
+
+	// 整体脚本在本地或远程执行（rclone 也在同一台机器上运行）
+	if isRemote {
 		conn := process.SSHConnection{
 			Host:       server.IPAddress,
 			Port:       server.Port,
 			Username:   server.Username,
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
-		if _, err := process.ExecAsyncRemote(conn, backupCmd, nil); err != nil {
-			volumeErr = fmt.Errorf("failed to create volume backup: %w", err)
+		if _, err := process.ExecAsyncRemote(conn, script, writeLog); err != nil {
+			volumeErr = extractExecError("failed to run volume backup", err)
 			return volumeErr
 		}
 	} else {
-		if _, err := process.ExecAsync(backupCmd); err != nil {
-			volumeErr = fmt.Errorf("failed to create volume backup: %w", err)
+		if _, err := process.ExecAsyncStream(script, writeLog); err != nil {
+			volumeErr = extractExecError("failed to run volume backup", err)
 			return volumeErr
 		}
 	}
 
-	// Upload to S3 using rclone（使用与 TS 版一致的 flags）
-	dest := vb.Destination
-	rcloneFlags := getRcloneFlags(dest)
-
-	// S3 路径包含服务 appName 子目录（Compose 类型会包含 serviceName）
-	s3AppName := getVolumeServiceAppName(&vb)
-	prefix := normalizeS3Path(vb.Prefix)
-	rcloneDestination := fmt.Sprintf(":s3:%s/%s/%s%s", dest.Bucket, s3AppName, prefix, filename)
-	uploadCmd := fmt.Sprintf("rclone copyto %s \"%s\" \"%s\"",
-		rcloneFlags, backupPath, rcloneDestination)
-
-	if _, err := process.ExecAsync(uploadCmd); err != nil {
-		os.Remove(backupPath)
-		volumeErr = fmt.Errorf("failed to upload volume backup: %w", err)
-		return volumeErr
+	// 更新 deployment 状态为 done
+	if deployment != nil {
+		now := time.Now().UTC().Format(time.RFC3339)
+		s.db.Model(&schema.Deployment{}).
+			Where("\"deploymentId\" = ?", deployment.DeploymentID).
+			Updates(map[string]interface{}{
+				"status":     schema.DeploymentStatusDone,
+				"finishedAt": now,
+			})
 	}
 
-	os.Remove(backupPath)
-
-	// 发送卷备份成功通知（包裹在 try-catch 中防止级联失败，与 TS v0.28.5 对齐）
+	// 发送卷备份成功通知
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -677,69 +836,161 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 	return nil
 }
 
-// RestoreVolumeBackup downloads a volume backup from S3 and restores it to the Docker volume.
-func (s *Service) RestoreVolumeBackup(volumeBackupID string, filename string) error {
-	var vb schema.VolumeBackup
-	if err := s.db.
-		Preload("Destination").
-		Preload("Application").
-		Preload("Application.Server").
-		Preload("Application.Server.SSHKey").
-		Preload("Compose").
-		Preload("Compose.Server").
-		Preload("Compose.Server.SSHKey").
-		First(&vb, "\"volumeBackupId\" = ?", volumeBackupID).Error; err != nil {
-		return fmt.Errorf("volume backup not found: %w", err)
+// createVolumeBackupDeployment 创建卷备份的 Deployment 记录
+func (s *Service) createVolumeBackupDeployment(vb *schema.VolumeBackup) *schema.Deployment {
+	appName := getVolumeServiceAppName(vb)
+	logDir := filepath.Join(s.cfg.Paths.LogsPath, appName)
+	os.MkdirAll(logDir, 0755)
+
+	formattedTime := time.Now().UTC().Format("2006-01-02:15:04:05")
+	logFile := filepath.Join(logDir, fmt.Sprintf("%s-%s.log", appName, formattedTime))
+	os.WriteFile(logFile, []byte("Initializing volume backup\n"), 0644)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	status := schema.DeploymentStatusRunning
+	title := fmt.Sprintf("Volume Backup: %s", vb.VolumeName)
+	vbID := vb.VolumeBackupID
+	deployment := &schema.Deployment{
+		VolumeBackupID: &vbID,
+		Title:          title,
+		Description:    &title,
+		Status:         &status,
+		LogPath:        logFile,
+		StartedAt:      &now,
 	}
 
-	if vb.Destination == nil {
-		return fmt.Errorf("volume backup destination not configured")
+	// 清理旧的部署记录，只保留最近 10 条
+	var oldDeployments []schema.Deployment
+	s.db.Where("\"volumeBackupId\" = ?", vb.VolumeBackupID).Order("\"createdAt\" DESC").Offset(10).Find(&oldDeployments)
+	for _, old := range oldDeployments {
+		os.Remove(old.LogPath)
+		s.db.Delete(&old)
 	}
 
-	dest := vb.Destination
-	tmpDir := "/tmp/dokploy-volume-restores"
-	os.MkdirAll(tmpDir, 0755)
-	localPath := filepath.Join(tmpDir, filename)
-	defer os.Remove(localPath)
+	if err := s.db.Create(deployment).Error; err != nil {
+		log.Printf("Warning: failed to create volume backup deployment record: %v", err)
+		return nil
+	}
+	return deployment
+}
 
-	rcloneFlags := getRcloneFlags(dest)
-
-	// S3 路径包含服务 appName 子目录，与上传路径保持一致
-	s3AppName := getVolumeServiceAppName(&vb)
-	prefix := normalizeS3Path(vb.Prefix)
-	s3Path := fmt.Sprintf(":s3:%s/%s/%s%s", dest.Bucket, s3AppName, prefix, filename)
-	downloadCmd := fmt.Sprintf("rclone copy %s \"%s\" %s", rcloneFlags, s3Path, tmpDir)
-
-	if _, err := process.ExecAsync(downloadCmd); err != nil {
-		return fmt.Errorf("failed to download volume backup: %w", err)
+// RestoreVolumeBackup 下载 S3 上的卷备份并恢复到 Docker volume。
+// 与 TS 版 restoreVolume 一致：直接接收所有参数（不查 VolumeBackup 记录），
+// 生成包含 rclone 下载 + docker restore 的完整 shell 脚本，
+// 整体在本地或远程执行。包含 volume 存在性检查和容器占用检测。
+func (s *Service) RestoreVolumeBackup(destinationID, volumeName, backupFileName, serviceID, serviceType, serverID string, onData func(string)) error {
+	// 查询 Destination（S3 凭据）
+	var dest schema.Destination
+	if err := s.db.First(&dest, "\"destinationId\" = ?", destinationID).Error; err != nil {
+		return fmt.Errorf("destination not found: %w", err)
 	}
 
-	// Restore the tar file into the Docker volume
-	restoreCmd := fmt.Sprintf(
-		"docker run --rm -v %s:/volume -v %s:/backup alpine sh -c 'rm -rf /volume/* && tar xf /backup/%s -C /volume'",
-		vb.VolumeName, tmpDir, filename,
+	// 判断是否远程服务器
+	var server *schema.Server
+	if serverID != "" {
+		var srv schema.Server
+		if err := s.db.Preload("SSHKey").First(&srv, "\"serverId\" = ?", serverID).Error; err == nil && srv.SSHKey != nil {
+			server = &srv
+		}
+	}
+	isRemote := server != nil && server.SSHKey != nil
+
+	// 与 TS 版一致：使用 /etc/dokploy/volume-backups/{volumeName} 路径
+	volumeBackupsPath := s.cfg.Paths.VolumeBackupsPath
+	volumeBackupPath := filepath.Join(volumeBackupsPath, volumeName)
+
+	rcloneFlags := getRcloneFlags(&dest)
+
+	// 与 TS 版一致：backupFileName 已包含完整的 S3 路径（bucket 内部）
+	backupPath := fmt.Sprintf(":s3:%s/%s", dest.Bucket, backupFileName)
+	// 提取文件名部分（去掉路径前缀），用于本地存储
+	localFileName := backupFileName
+	if idx := strings.LastIndex(backupFileName, "/"); idx >= 0 {
+		localFileName = backupFileName[idx+1:]
+	}
+	downloadCommand := fmt.Sprintf(`rclone copyto %s "%s" "%s/%s"`, rcloneFlags, backupPath, volumeBackupPath, localFileName)
+
+	// 与 TS 版 restoreVolume 完全一致的 shell 脚本
+	baseRestoreCommand := fmt.Sprintf(`
+set -e
+echo "Volume name: %s"
+echo "Backup file name: %s"
+echo "Volume backup path: %s"
+echo "Downloading backup from S3..."
+mkdir -p %s
+%s
+echo "Download completed ✅"
+echo "Creating new volume and restoring data..."
+docker run --rm -v %s:/volume_data -v %s:/backup ubuntu bash -c "cd /volume_data && tar xvf /backup/%s ."
+echo "Volume restore completed ✅"
+`,
+		volumeName, backupFileName, volumeBackupPath,
+		volumeBackupPath,
+		downloadCommand,
+		volumeName, volumeBackupPath, localFileName,
 	)
 
-	var server *schema.Server
-	if vb.Application != nil && vb.Application.Server != nil {
-		server = vb.Application.Server
-	} else if vb.Compose != nil && vb.Compose.Server != nil {
-		server = vb.Compose.Server
-	}
+	// 与 TS 版一致：检查 volume 是否存在、是否被容器占用
+	script := fmt.Sprintf(`
+set -e
+VOLUME_EXISTS=$(docker volume ls -q --filter name="^%s$" | wc -l)
+echo "Volume exists: $VOLUME_EXISTS"
 
-	if server != nil && server.SSHKey != nil {
+if [ "$VOLUME_EXISTS" = "0" ]; then
+  echo "Volume doesn't exist, proceeding with direct restore"
+  %s
+else
+  echo "Volume exists, checking for containers using it (including stopped ones)..."
+  CONTAINERS_USING_VOLUME=$(docker ps -a --filter "volume=%s" --format "{{.ID}}|{{.Names}}|{{.State}}|{{.Labels}}")
+  if [ -z "$CONTAINERS_USING_VOLUME" ]; then
+    echo "Volume exists but no containers are using it"
+    echo "Removing existing volume and proceeding with restore"
+    docker volume rm %s --force
+    %s
+  else
+    echo ""
+    echo "WARNING: Cannot restore volume as it is currently in use!"
+    echo ""
+    echo "The following containers are using volume '%s':"
+    echo ""
+    echo "$CONTAINERS_USING_VOLUME" | while IFS='|' read container_id container_name container_state labels; do
+      echo "   Container: $container_name ($container_id)"
+      echo "      Status: $container_state"
+    done
+    echo ""
+    echo "To restore this volume, please:"
+    echo "   1. Stop all containers/services using this volume"
+    echo "   2. Remove the existing volume: docker volume rm %s"
+    echo "   3. Run the restore operation again"
+    echo ""
+    echo "Volume restore aborted - volume is in use"
+    exit 1
+  fi
+fi
+`,
+		volumeName,
+		baseRestoreCommand,
+		volumeName,
+		volumeName,
+		baseRestoreCommand,
+		volumeName,
+		volumeName,
+	)
+
+	// 整体脚本在本地或远程执行（流式输出日志到 onData 回调）
+	if isRemote {
 		conn := process.SSHConnection{
 			Host:       server.IPAddress,
 			Port:       server.Port,
 			Username:   server.Username,
 			PrivateKey: server.SSHKey.PrivateKey,
 		}
-		if _, err := process.ExecAsyncRemote(conn, restoreCmd, nil); err != nil {
-			return fmt.Errorf("failed to restore volume backup: %w", err)
+		if _, err := process.ExecAsyncRemote(conn, script, onData); err != nil {
+			return extractExecError("failed to restore volume backup", err)
 		}
 	} else {
-		if _, err := process.ExecAsync(restoreCmd); err != nil {
-			return fmt.Errorf("failed to restore volume backup: %w", err)
+		if _, err := process.ExecAsyncStream(script, onData); err != nil {
+			return extractExecError("failed to restore volume backup", err)
 		}
 	}
 

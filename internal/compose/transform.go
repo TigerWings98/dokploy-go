@@ -476,6 +476,103 @@ func addSuffixToConfigs(raw map[string]any, suffix string) {
 	}
 }
 
+// --- Traefik label injection ---
+
+// ServiceTraefikLabels 包含要注入到指定 compose service 的 Traefik Docker 标签
+type ServiceTraefikLabels struct {
+	ServiceName string
+	Labels      []string
+}
+
+// InjectTraefikLabels 注入 Traefik Docker 标签到 compose YAML 中
+// 与 TS 版 addDomainToCompose 中的标签注入逻辑一致：
+// - docker-compose 类型：标签放在 services[serviceName].labels（数组格式）
+// - stack 类型：标签放在 services[serviceName].deploy.labels（数组格式）
+func InjectTraefikLabels(data []byte, labelSets []ServiceTraefikLabels, composeType string) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty compose content")
+	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+
+	services, ok := raw["services"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("no services found in compose file")
+	}
+
+	for _, ls := range labelSets {
+		svc, ok := services[ls.ServiceName]
+		if !ok {
+			continue
+		}
+		svcMap, ok := svc.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if composeType == "stack" {
+			// Stack: 标签放在 services[name].deploy.labels
+			deploy, ok := svcMap["deploy"].(map[string]any)
+			if !ok {
+				deploy = make(map[string]any)
+				svcMap["deploy"] = deploy
+			}
+			existing := extractLabelSlice(deploy["labels"])
+			// 与 TS 版 unshift 一致：新标签放在前面
+			merged := make([]any, 0, len(ls.Labels)+len(existing))
+			for _, l := range ls.Labels {
+				merged = append(merged, l)
+			}
+			for _, l := range existing {
+				merged = append(merged, l)
+			}
+			deploy["labels"] = merged
+		} else {
+			// docker-compose: 标签放在 services[name].labels
+			existing := extractLabelSlice(svcMap["labels"])
+			merged := make([]any, 0, len(ls.Labels)+len(existing))
+			for _, l := range ls.Labels {
+				merged = append(merged, l)
+			}
+			for _, l := range existing {
+				merged = append(merged, l)
+			}
+			svcMap["labels"] = merged
+		}
+	}
+
+	return yaml.Marshal(raw)
+}
+
+// extractLabelSlice 从 YAML 值中提取标签字符串列表
+// 支持数组格式 ["key=value"] 和 map 格式 {key: value}
+func extractLabelSlice(val any) []string {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case []any:
+		var result []string
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case []string:
+		return v
+	case map[string]any:
+		var result []string
+		for k, v := range v {
+			result = append(result, fmt.Sprintf("%s=%v", k, v))
+		}
+		return result
+	}
+	return nil
+}
+
 // --- Secret transformation ---
 
 func addSuffixToSecrets(raw map[string]any, suffix string) {

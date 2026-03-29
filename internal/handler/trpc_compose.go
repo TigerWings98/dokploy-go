@@ -110,8 +110,11 @@ func (h *Handler) registerComposeTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 		composeID, _ := in["composeId"].(string)
 		delete(in, "composeId")
-		// 与 TS 版 apiUpdateCompose.omit({ serverId: true }) 一致：禁止修改 serverId
+		// 与 TS 版 apiUpdateCompose.omit({serverId}) 一致：禁止修改 serverId
 		delete(in, "serverId")
+		// 排除自动生成的不可变字段
+		delete(in, "createdAt")
+		delete(in, "organizationId")
 		// TS 版通过 Zod apiUpdateCompose 过滤无关字段，Go 版需显式过滤
 		// 前端可能发送 mongoId/mysqlId/mariadbId/postgresId/redisId 等不属于 compose 表的字段
 		in = h.filterColumns(&schema.Compose{}, in)

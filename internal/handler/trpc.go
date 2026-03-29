@@ -356,3 +356,15 @@ func (h *Handler) filterColumns(model interface{}, data map[string]interface{}) 
 	}
 	return filtered
 }
+
+// pickFields 从 map 中只保留白名单字段（与 TS 版 Zod schema .pick() 对齐）。
+// 用于 update handler 中限制可更新字段，防止前端发送超范围字段导致数据损坏。
+func pickFields(data map[string]interface{}, allowed map[string]bool) map[string]interface{} {
+	result := make(map[string]interface{}, len(allowed))
+	for k, v := range data {
+		if allowed[k] {
+			result[k] = v
+		}
+	}
+	return result
+}

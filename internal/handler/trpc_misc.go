@@ -73,13 +73,20 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["destinationId"].(string)
-		delete(in, "destinationId")
-		in = h.filterColumns(&schema.Destination{}, in)
+
+		// 与 TS 版 apiUpdateDestination.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"name": true, "accessKey": true, "bucket": true, "region": true,
+			"endpoint": true, "secretAccessKey": true, "provider": true, "serverId": true,
+		})
+
 		var dest schema.Destination
 		if err := h.DB.First(&dest, "\"destinationId\" = ?", id).Error; err != nil {
 			return nil, &trpcErr{"Destination not found", "NOT_FOUND", 404}
 		}
-		h.DB.Model(&dest).Updates(in)
+		if len(updates) > 0 {
+			h.DB.Model(&dest).Updates(updates)
+		}
 		// 重新查询返回更新后的数据（避免返回旧值导致前端下次保存覆盖）
 		h.DB.First(&dest, "\"destinationId\" = ?", id)
 		return dest, nil
@@ -159,9 +166,16 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["mountId"].(string)
-		delete(in, "mountId")
-		in = h.filterColumns(&schema.Mount{}, in)
-		h.DB.Model(&schema.Mount{}).Where("\"mountId\" = ?", id).Updates(in)
+
+		// 与 TS 版 apiUpdateMount.partial() 对齐：只允许更新 create schema 中的字段
+		updates := pickFields(in, map[string]bool{
+			"type": true, "hostPath": true, "volumeName": true, "filePath": true,
+			"content": true, "serviceType": true, "mountPath": true,
+		})
+
+		if len(updates) > 0 {
+			h.DB.Model(&schema.Mount{}).Where("\"mountId\" = ?", id).Updates(updates)
+		}
 		return true, nil
 	}
 
@@ -274,9 +288,15 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["portId"].(string)
-		delete(in, "portId")
-		in = h.filterColumns(&schema.Port{}, in)
-		h.DB.Model(&schema.Port{}).Where("\"portId\" = ?", id).Updates(in)
+
+		// 与 TS 版 apiUpdatePort.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"publishedPort": true, "publishMode": true, "targetPort": true, "protocol": true,
+		})
+
+		if len(updates) > 0 {
+			h.DB.Model(&schema.Port{}).Where("\"portId\" = ?", id).Updates(updates)
+		}
 		return true, nil
 	}
 
@@ -315,9 +335,15 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["redirectId"].(string)
-		delete(in, "redirectId")
-		in = h.filterColumns(&schema.Redirect{}, in)
-		h.DB.Model(&schema.Redirect{}).Where("\"redirectId\" = ?", id).Updates(in)
+
+		// 与 TS 版 apiUpdateRedirect.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"regex": true, "replacement": true, "permanent": true,
+		})
+
+		if len(updates) > 0 {
+			h.DB.Model(&schema.Redirect{}).Where("\"redirectId\" = ?", id).Updates(updates)
+		}
 		return true, nil
 	}
 
@@ -356,9 +382,15 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["securityId"].(string)
-		delete(in, "securityId")
-		in = h.filterColumns(&schema.Security{}, in)
-		h.DB.Model(&schema.Security{}).Where("\"securityId\" = ?", id).Updates(in)
+
+		// 与 TS 版 apiUpdateSecurity.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"username": true, "password": true,
+		})
+
+		if len(updates) > 0 {
+			h.DB.Model(&schema.Security{}).Where("\"securityId\" = ?", id).Updates(updates)
+		}
 		return true, nil
 	}
 
@@ -423,9 +455,17 @@ func (h *Handler) registerMiscTRPC(r procedureRegistry) {
 		var in map[string]interface{}
 		json.Unmarshal(input, &in)
 		id, _ := in["domainId"].(string)
-		delete(in, "domainId")
-		in = h.filterColumns(&schema.Domain{}, in)
-		h.DB.Model(&schema.Domain{}).Where("\"domainId\" = ?", id).Updates(in)
+
+		// 与 TS 版 apiUpdateDomain.pick() 对齐：只允许更新指定字段
+		updates := pickFields(in, map[string]bool{
+			"host": true, "path": true, "port": true, "https": true,
+			"certificateType": true, "customCertResolver": true, "serviceName": true,
+			"domainType": true, "internalPath": true, "stripPath": true,
+		})
+
+		if len(updates) > 0 {
+			h.DB.Model(&schema.Domain{}).Where("\"domainId\" = ?", id).Updates(updates)
+		}
 
 		// 更新后重新生成 Traefik 配置（与 TS 版 manageDomain 一致）
 		var domain schema.Domain

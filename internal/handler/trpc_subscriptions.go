@@ -153,27 +153,26 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 	}
 
 	// volumeBackups.restoreVolumeBackupWithLogs
+	// 与 TS 版一致：直接接收所有参数（destinationId, volumeName, backupFileName, id, serviceType, serverId），
+	// 不查 VolumeBackup 记录
 	s["volumeBackups.restoreVolumeBackupWithLogs"] = func(c echo.Context, input json.RawMessage, emit chan<- interface{}) {
 		defer close(emit)
 		var in struct {
-			VolumeBackupID string `json:"volumeBackupId"`
-			FileName       string `json:"fileName"`
+			ID             string `json:"id"`
+			ServiceType    string `json:"serviceType"`
+			ServerID       string `json:"serverId"`
+			DestinationID  string `json:"destinationId"`
+			VolumeName     string `json:"volumeName"`
+			BackupFileName string `json:"backupFileName"`
 		}
 		json.Unmarshal(input, &in)
 
 		emit <- "Starting volume backup restore..."
+		emit <- fmt.Sprintf("Restoring volume: %s", in.VolumeName)
 
-		var vb schema.VolumeBackup
-		if err := h.DB.First(&vb, "\"volumeBackupId\" = ?", in.VolumeBackupID).Error; err != nil {
-			emit <- "Error: Volume backup not found"
-			return
-		}
-
-		emit <- fmt.Sprintf("Restoring volume: %s", vb.VolumeName)
-
-		// Volume restore: download from S3 and apply to Docker volume
 		if h.BackupSvc != nil {
-			err := h.BackupSvc.RestoreVolumeBackup(in.VolumeBackupID, in.FileName)
+			onData := func(data string) { emit <- data }
+			err := h.BackupSvc.RestoreVolumeBackup(in.DestinationID, in.VolumeName, in.BackupFileName, in.ID, in.ServiceType, in.ServerID, onData)
 			if err != nil {
 				emit <- "Error: " + err.Error()
 				return

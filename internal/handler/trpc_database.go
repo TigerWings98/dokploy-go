@@ -117,8 +117,12 @@ func (h *Handler) registerDatabaseTRPC(r procedureRegistry) {
 			json.Unmarshal(input, &in)
 			id, _ := in[d.idField].(string)
 			delete(in, d.idField)
-			// 与 TS 版一致：禁止修改 appName
+			// 与 TS 版一致：禁止修改 appName 和 serverId
 			delete(in, "appName")
+			delete(in, "serverId")
+			// 排除自动生成的不可变字段
+			delete(in, "createdAt")
+			delete(in, "organizationId")
 			// 过滤不属于当前数据库表的字段（前端共享 mutation 会发送所有 ID）
 			in = h.filterColumns(d.newModel(), in)
 			h.DB.Table(tableName).Where(quotedID+" = ?", id).Updates(in)

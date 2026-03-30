@@ -290,6 +290,14 @@ func (s *ComposeService) runDeployRemote(compose *schema.Compose, deployment *sc
 	composePath := "/etc/dokploy/compose"
 	projectPath := fmt.Sprintf("%s/%s/code", composePath, compose.AppName)
 
+	// 与 TS 版一致：先在远程服务器上创建日志目录和日志文件，
+	// 后续命令的输出会通过 >> logPath 追加到远程日志文件
+	remoteLogDir := filepath.Dir(deployment.LogPath)
+	initLogCmd := fmt.Sprintf(`mkdir -p "%s"; echo "Initializing deployment" >> "%s"`, remoteLogDir, deployment.LogPath)
+	if _, err := process.ExecAsyncRemote(conn, initLogCmd, nil); err != nil {
+		writeLog(fmt.Sprintf("Warning: failed to init remote log dir: %v", err))
+	}
+
 	// Step 1: 准备源码（与 TS 版一致，通过 SSH 在远程服务器上执行）
 	var prepareCmd string
 	switch compose.SourceType {

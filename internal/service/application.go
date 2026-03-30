@@ -192,6 +192,13 @@ func (s *ApplicationService) runDeployRemote(app *schema.Application, deployment
 
 	buildDir := fmt.Sprintf("/etc/dokploy/applications/%s/code", app.AppName)
 
+	// 与 TS 版一致：先在远程服务器上创建日志目录，后续命令输出通过 >> logPath 追加
+	remoteLogDir := filepath.Dir(deployment.LogPath)
+	initLogCmd := fmt.Sprintf(`mkdir -p "%s"; echo "Initializing deployment" >> "%s"`, remoteLogDir, deployment.LogPath)
+	if _, err := process.ExecAsyncRemote(conn, initLogCmd, nil); err != nil {
+		writeLog(fmt.Sprintf("Warning: failed to init remote log dir: %v", err))
+	}
+
 	// 与 TS 版一致：构建 set -e; clone; build 的完整命令
 	command := "set -e;"
 
@@ -502,6 +509,13 @@ func (s *ApplicationService) runRebuild(app *schema.Application, deployment *sch
 			Port:       app.Server.Port,
 			Username:   app.Server.Username,
 			PrivateKey: app.Server.SSHKey.PrivateKey,
+		}
+
+		// 与 TS 版一致：先在远程服务器上创建日志目录
+		remoteLogDir := filepath.Dir(deployment.LogPath)
+		initLogCmd := fmt.Sprintf(`mkdir -p "%s"; echo "Initializing rebuild" >> "%s"`, remoteLogDir, deployment.LogPath)
+		if _, initErr := process.ExecAsyncRemote(conn, initLogCmd, nil); initErr != nil {
+			writeLog(fmt.Sprintf("Warning: failed to init remote log dir: %v", initErr))
 		}
 
 		buildDir := fmt.Sprintf("/etc/dokploy/applications/%s/code", app.AppName)

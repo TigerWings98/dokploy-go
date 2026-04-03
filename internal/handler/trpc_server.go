@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/setup"
 	"github.com/labstack/echo/v4"
 )
 
@@ -107,6 +108,7 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		return count, nil
 	}
 
+	// 与 TS 版 defaultCommand 对齐：返回完整的 setup bash 脚本内容（而非 curl 命令）
 	r["server.getDefaultCommand"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			ServerID string `json:"serverId"`
@@ -114,19 +116,12 @@ func (h *Handler) registerServerTRPC(r procedureRegistry) {
 		json.Unmarshal(input, &in)
 
 		var server schema.Server
-		if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
+		if err := h.DB.First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
 			return nil, &trpcErr{"Server not found", "NOT_FOUND", 404}
 		}
 
-		settings, _ := h.getOrCreateSettings()
-		serverIP := "0.0.0.0"
-		if settings != nil && settings.ServerIP != nil {
-			serverIP = *settings.ServerIP
-		}
-
-		cmd := fmt.Sprintf("curl -sSL https://%s/api/setup | bash -s -- %s",
-			serverIP, server.ServerID)
-		return cmd, nil
+		isBuildServer := server.ServerType == schema.ServerTypeBuild
+		return setup.GenerateServerSetupScript(isBuildServer), nil
 	}
 
 	// server.validate - 通过 SSH 执行验证脚本，检查 Docker/RClone/Nixpacks/Buildpacks/Railpack/Swarm/Network/目录（与 TS 版完全一致）

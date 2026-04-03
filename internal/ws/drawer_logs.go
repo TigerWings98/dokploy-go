@@ -8,7 +8,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -277,6 +280,29 @@ func (h *Handler) handleServerSetup(input json.RawMessage, emit func(string) boo
 
 	emit("Connected successfully!\n\n")
 
+	// 创建 Deployment 记录（与 TS 版 createServerDeployment 对齐）
+	logsPath := "/etc/dokploy/logs"
+	logDir := filepath.Join(logsPath, server.AppName)
+	os.MkdirAll(logDir, 0755)
+	formattedTime := time.Now().UTC().Format("2006-01-02:15:04:05")
+	logFile := filepath.Join(logDir, fmt.Sprintf("%s-%s.log", server.AppName, formattedTime))
+	os.WriteFile(logFile, []byte("Initializing Setup Server\n"), 0644)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	deployStatus := schema.DeploymentStatusRunning
+	deployTitle := "Setup Server"
+	deployment := &schema.Deployment{
+		ServerID:    &server.ServerID,
+		Title:       deployTitle,
+		Description: &deployTitle,
+		Status:      &deployStatus,
+		LogPath:     logFile,
+		StartedAt:   &now,
+	}
+	if err := h.DB.Create(deployment).Error; err != nil {
+		log.Printf("Warning: failed to create server setup deployment: %v", err)
+	}
+
 	// Create SSH session
 	session, err := client.NewSession()
 	if err != nil {
@@ -300,33 +326,56 @@ func (h *Handler) handleServerSetup(input json.RawMessage, emit func(string) boo
 		return
 	}
 
-	// Stream output
+	// Stream output，同时写入日志文件
+	logWriter, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644)
+	defer func() {
+		if logWriter != nil {
+			logWriter.Close()
+		}
+	}()
+
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 	for scanner.Scan() {
+		line := scanner.Text() + "\n"
 		select {
 		case <-done:
 			session.Close()
 			return
 		default:
-			if !emit(scanner.Text() + "\n") {
+			if !emit(line) {
 				session.Close()
 				return
+			}
+			if logWriter != nil {
+				logWriter.WriteString(line)
 			}
 		}
 	}
 
 	// Wait for command to finish
 	exitErr := session.Wait()
+	doneAt := time.Now().UTC().Format(time.RFC3339)
 
 	if exitErr != nil {
 		emit(fmt.Sprintf("\nSetup failed with error: %v\n", exitErr))
 		emit("\nSetup Server: ❌\n")
+		// 更新 deployment 状态为 error
+		if deployment != nil {
+			h.DB.Model(deployment).Updates(map[string]interface{}{
+				"status": schema.DeploymentStatusError, "errorMessage": exitErr.Error(), "finishedAt": doneAt,
+			})
+		}
 	} else {
 		emit("\nSetup Server: ✅\n")
-		// Update server status
+		// 更新 server 状态和 deployment 状态
 		h.DB.Table("server").Where("\"serverId\" = ?", in.ServerID).
 			Update("\"serverStatus\"", "active")
+		if deployment != nil {
+			h.DB.Model(deployment).Updates(map[string]interface{}{
+				"status": schema.DeploymentStatusDone, "finishedAt": doneAt,
+			})
+		}
 	}
 
 	emit("Deployment completed successfully!")

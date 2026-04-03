@@ -7,9 +7,14 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dokploy/dokploy/internal/db/schema"
+	"github.com/dokploy/dokploy/internal/process"
+	"github.com/dokploy/dokploy/internal/setup"
 	"github.com/labstack/echo/v4"
 )
 
@@ -53,7 +58,11 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 		}
 	}
 
-	// server.setupWithLogs
+	// server.setupWithLogs — 与 TS 版 serverSetup 对齐：
+	// 1. 创建 Deployment 记录
+	// 2. 通过 SSH 执行 server.command（用户自定义）或 defaultCommand（默认脚本）
+	// 3. 实时流式输出日志
+	// 4. 更新 server 状态和 deployment 状态
 	s["server.setupWithLogs"] = func(c echo.Context, input json.RawMessage, emit chan<- interface{}) {
 		defer close(emit)
 		var in struct {
@@ -65,37 +74,89 @@ func (h *Handler) registerSubscriptionsTRPC(s subscriptionRegistry) {
 			return
 		}
 
-		emit <- "Starting server setup..."
-
-		// The server setup is handled by the existing setup flow
-		// Stream progress updates
 		var server schema.Server
-		if err := h.DB.First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
+		if err := h.DB.Preload("SSHKey").First(&server, "\"serverId\" = ?", in.ServerID).Error; err != nil {
 			emit <- "Error: Server not found"
 			return
 		}
+		if server.SSHKey == nil {
+			emit <- "Error: No SSH Key found, please assign one to this server"
+			return
+		}
 
-		emit <- fmt.Sprintf("Setting up server: %s", server.Name)
-		emit <- "Installing Docker and dependencies..."
+		// 创建 Deployment 记录（与 TS 版 createServerDeployment 对齐）
+		logsPath := h.Config.Paths.LogsPath
+		logDir := filepath.Join(logsPath, server.AppName)
+		os.MkdirAll(logDir, 0755)
+		formattedTime := time.Now().UTC().Format("2006-01-02:15:04:05")
+		logFile := filepath.Join(logDir, fmt.Sprintf("%s-%s.log", server.AppName, formattedTime))
+		os.WriteFile(logFile, []byte("Initializing Setup Server\n"), 0644)
 
-		// Monitor server status changes
-		for i := 0; i < 60; i++ {
-			select {
-			case <-c.Request().Context().Done():
-				return
-			default:
-			}
-			time.Sleep(2 * time.Second)
-			var current schema.Server
-			if err := h.DB.First(&current, "\"serverId\" = ?", in.ServerID).Error; err != nil {
-				continue
-			}
-			if string(current.ServerStatus) == "active" {
-				emit <- "Server setup completed successfully!"
-				return
+		now := time.Now().UTC().Format(time.RFC3339)
+		status := schema.DeploymentStatusRunning
+		title := "Setup Server"
+		deployment := &schema.Deployment{
+			ServerID:    &server.ServerID,
+			Title:       title,
+			Description: &title,
+			Status:      &status,
+			LogPath:     logFile,
+			StartedAt:   &now,
+		}
+		if err := h.DB.Create(deployment).Error; err != nil {
+			log.Printf("Warning: failed to create server setup deployment: %v", err)
+		}
+
+		// 与 TS 版 installRequirements 对齐：优先使用 server.command（用户自定义脚本）
+		isBuildServer := server.ServerType == schema.ServerTypeBuild
+		command := server.Command
+		if command == "" {
+			command = setup.GenerateServerSetupScript(isBuildServer)
+		}
+
+		if isBuildServer {
+			emit <- "\nInstalling Build Server Dependencies: ✅\n"
+		} else {
+			emit <- "\nInstalling Server Dependencies: ✅\n"
+		}
+
+		// 通过 SSH 执行脚本并流式输出
+		conn := process.SSHConnection{
+			Host:       server.IPAddress,
+			Port:       server.Port,
+			Username:   server.Username,
+			PrivateKey: server.SSHKey.PrivateKey,
+		}
+
+		onData := func(data string) {
+			emit <- data
+			// 同时追加到日志文件
+			if f, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+				f.WriteString(data)
+				f.Close()
 			}
 		}
-		emit <- "Server setup timed out. Check server status manually."
+
+		_, err := process.ExecAsyncRemote(conn, command, onData)
+		if err != nil {
+			errMsg := fmt.Sprintf("Setup failed: %v", err)
+			emit <- errMsg + " ❌\n"
+			// 更新 deployment 状态为 error
+			doneAt := time.Now().UTC().Format(time.RFC3339)
+			h.DB.Model(deployment).Updates(map[string]interface{}{
+				"status": schema.DeploymentStatusError, "errorMessage": errMsg, "finishedAt": doneAt,
+			})
+			return
+		}
+
+		// 更新 server 状态为 active + deployment 状态为 done
+		h.DB.Model(&server).Update("serverStatus", "active")
+		doneAt := time.Now().UTC().Format(time.RFC3339)
+		h.DB.Model(deployment).Updates(map[string]interface{}{
+			"status": schema.DeploymentStatusDone, "finishedAt": doneAt,
+		})
+
+		emit <- "\nSetup Server: ✅\n"
 	}
 
 	// backup.restoreBackupWithLogs

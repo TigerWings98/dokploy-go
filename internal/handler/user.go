@@ -134,7 +134,8 @@ func (h *Handler) CreateAPIKey(c echo.Context) error {
 	apiKey := &schema.APIKey{
 		Name:             &req.Name,
 		Key:              rawKey,
-		UserID:           user.ID,
+		ReferenceID:      user.ID,
+		ConfigID:         "default",
 		Start:            &start,
 		Prefix:           prefix,
 		ExpiresAt:        expiresAt,

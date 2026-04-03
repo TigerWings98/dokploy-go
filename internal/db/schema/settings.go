@@ -26,6 +26,8 @@ type WebServerSettings struct {
 	CleanupCacheApplications bool            `gorm:"column:cleanupCacheApplications;not null;default:false" json:"cleanupCacheApplications"`
 	CleanupCacheOnPreviews   bool            `gorm:"column:cleanupCacheOnPreviews;not null;default:false" json:"cleanupCacheOnPreviews"`
 	CleanupCacheOnCompose    bool            `gorm:"column:cleanupCacheOnCompose;not null;default:false" json:"cleanupCacheOnCompose"`
+	// v0.28.6 新增：企业版白标配置（jsonb）
+	WhitelabelingConfig      JSONField[any]  `gorm:"column:whitelabelingConfig;type:jsonb" json:"whitelabelingConfig"`
 	CreatedAt                time.Time       `gorm:"column:createdAt;not null;default:now()" json:"createdAt"`
 	UpdatedAt                time.Time       `gorm:"column:updatedAt;not null;default:now()" json:"updatedAt"`
 }

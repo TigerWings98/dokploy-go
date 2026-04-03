@@ -42,7 +42,7 @@ type User struct {
 	// Relations
 	Account       *Account       `gorm:"foreignKey:UserID;references:ID" json:"account,omitempty"`
 	Organizations []Organization `gorm:"foreignKey:OwnerID;references:ID" json:"organizations"`
-	APIKeys       []APIKey       `gorm:"foreignKey:UserID;references:ID" json:"apiKeys"`
+	APIKeys       []APIKey       `gorm:"foreignKey:ReferenceID;references:ID" json:"apiKeys"`
 	Backups       []Backup       `gorm:"foreignKey:UserID;references:ID" json:"backups"`
 }
 
@@ -215,7 +215,8 @@ type APIKey struct {
 	Start              *string    `gorm:"column:start;type:text" json:"start"`
 	Prefix             *string    `gorm:"column:prefix;type:text" json:"prefix"`
 	Key                string     `gorm:"column:key;type:text;not null" json:"key"`
-	UserID             string     `gorm:"column:user_id;type:text;not null" json:"userId"`
+	ConfigID           string     `gorm:"column:config_id;type:text;not null;default:default" json:"configId"`
+	ReferenceID        string     `gorm:"column:reference_id;type:text;not null" json:"referenceId"`
 	RefillInterval     *int       `gorm:"column:refill_interval" json:"refillInterval"`
 	RefillAmount       *int       `gorm:"column:refill_amount" json:"refillAmount"`
 	LastRefillAt       *time.Time `gorm:"column:last_refill_at" json:"lastRefillAt"`
@@ -232,7 +233,7 @@ type APIKey struct {
 	Permissions        *string    `gorm:"column:permissions;type:text" json:"permissions"`
 	Metadata           *string    `gorm:"column:metadata;type:text" json:"metadata"`
 
-	User *User `gorm:"foreignKey:UserID;references:ID" json:"user,omitempty"`
+	User *User `gorm:"foreignKey:ReferenceID;references:ID" json:"user,omitempty"`
 }
 
 func (APIKey) TableName() string { return "apikey" }

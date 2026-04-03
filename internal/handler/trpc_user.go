@@ -259,7 +259,8 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		hashedKey := auth.HashAPIKey(fullKey)
 
 		apiKey := schema.APIKey{
-			UserID:      user.ID,
+			ReferenceID: user.ID,
+			ConfigID:    "default",
 			Key:         hashedKey,
 			Name:        &in.Name,
 			Prefix:      &prefix,

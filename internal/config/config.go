@@ -76,9 +76,10 @@ func Load() *Config {
 
 	cfg := &Config{
 		DatabaseURL:      buildDatabaseURL(),
-		DockerAPIVersion: os.Getenv("DOCKER_API_VERSION"),
-		DockerHost:       os.Getenv("DOCKER_HOST"),
-		DockerPort:       os.Getenv("DOCKER_PORT"),
+		// 与 TS v0.28.6 对齐：Docker 配置改用 DOKPLOY_ 前缀，同时兼容旧前缀
+		DockerAPIVersion: getEnvWithFallback("DOKPLOY_DOCKER_API_VERSION", "DOCKER_API_VERSION"),
+		DockerHost:       getEnvWithFallback("DOKPLOY_DOCKER_HOST", "DOCKER_HOST"),
+		DockerPort:       getEnvWithFallback("DOKPLOY_DOCKER_PORT", "DOCKER_PORT"),
 		BetterAuthSecret: getEnvDefault("BETTER_AUTH_SECRET", "better-auth-secret-123456789"),
 		IsCloud:          isCloud,
 	}
@@ -127,6 +128,14 @@ func getEnvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getEnvWithFallback 优先读取 primary 环境变量，不存在时回退到 fallback 环境变量
+func getEnvWithFallback(primary, fallback string) string {
+	if v := os.Getenv(primary); v != "" {
+		return v
+	}
+	return os.Getenv(fallback)
 }
 
 // isRunningInContainer checks if we're running inside a container.

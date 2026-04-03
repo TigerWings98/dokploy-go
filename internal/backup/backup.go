@@ -556,7 +556,7 @@ docker cp $PGCONTAINER:/tmp/database.sql $TMPDIR/database.sql
 docker exec $PGCONTAINER rm -f /tmp/database.sql
 
 # 3. 备份文件系统
-rsync -a --ignore-errors --no-specials --no-devices %s/ $TMPDIR/filesystem/ || true
+rsync -a --ignore-errors --no-specials --no-devices --exclude='volume-backups/' %s/ $TMPDIR/filesystem/ || true
 
 # 4. 打包为 zip
 cd $TMPDIR && zip -r %s *.sql filesystem/ > /dev/null 2>&1
@@ -652,8 +652,9 @@ func (s *Service) RunVolumeBackup(volumeBackupID string) error {
 	rcloneDestination := fmt.Sprintf(":s3:%s/%s/%s%s", dest.Bucket, s3AppName, prefix, backupFileName)
 	rcloneCommand := fmt.Sprintf(`rclone copyto %s "%s/%s" "%s"`, rcloneFlags, volumeBackupPath, backupFileName, rcloneDestination)
 
-	// 与 TS 版 backupVolume 完全一致：生成完整 shell 脚本（tar + rclone + cleanup）
-	baseCommand := fmt.Sprintf(`
+	// 与 TS 版 backupVolume v0.28.7 一致：拆分为 backupCommand 和 uploadCommand 两阶段
+	// turnOff=true 时：停止 → backup → 重启 → upload（容器在上传期间已恢复运行）
+	backupCommand := fmt.Sprintf(`
 echo "Volume name: %s"
 echo "Backup file name: %s"
 echo "Turning off volume backup: %s"
@@ -662,12 +663,6 @@ echo "Dir: %s"
 mkdir -p "%s"
 docker run --rm -v %s:/volume_data -v %s:/backup ubuntu bash -c "cd /volume_data && tar cvf /backup/%s ."
 echo "Volume backup done"
-echo "Starting upload to S3..."
-%s
-echo "Upload to S3 done"
-echo "Cleaning up local backup file..."
-rm -f "%s/%s"
-echo "Local backup file cleaned up"
 `,
 		vb.VolumeName, backupFileName,
 		func() string {
@@ -678,9 +673,23 @@ echo "Local backup file cleaned up"
 		}(),
 		volumeBackupPath, volumeBackupPath,
 		vb.VolumeName, volumeBackupPath, backupFileName,
+	)
+
+	// 上传命令不使用 set -e（与 TS v0.28.7 对齐：允许上传失败后继续清理）
+	uploadCommand := fmt.Sprintf(`
+echo "Starting upload to S3..."
+%s
+echo "Upload to S3 done"
+echo "Cleaning up local backup file..."
+rm -f "%s/%s"
+echo "Local backup file cleaned up"
+`,
 		rcloneCommand,
 		volumeBackupPath, backupFileName,
 	)
+
+	// 非 turnOff 时的完整命令（backup + upload 连续执行）
+	baseCommand := backupCommand + uploadCommand
 
 	// 构建最终脚本：根据 turnOff 设置决定是否停止/启动服务
 	var script string
@@ -758,6 +767,7 @@ fi`
 		}
 
 		// 与 TS 版 lockWrapper 一致：使用 flock 或 mkdir 回退实现文件锁
+		// v0.28.7 改进：停止 → 备份 → 重启 → 上传（容器在上传期间已恢复运行）
 		script = fmt.Sprintf(`
 set -e
 LOCK_PATH="%s"
@@ -777,8 +787,9 @@ echo "Volume backup lock acquired"
 %s
 %s
 %s
+%s
 echo "Volume backup lock released"
-`, lockPath, stopCommand, baseCommand, startCommand)
+`, lockPath, stopCommand, backupCommand, startCommand, uploadCommand)
 	}
 
 	// 准备日志写入（Deployment 日志文件）
@@ -997,6 +1008,14 @@ fi
 	return nil
 }
 
+// truncateMsg 截断错误消息到 maxLen 字符（与 TS v0.28.7 对齐：防止通知消息过长）
+func truncateMsg(msg string, maxLen int) string {
+	if len(msg) > maxLen {
+		return msg[:maxLen]
+	}
+	return msg
+}
+
 // sendBackupNotification 发送数据库备份通知（与 TS 版 sendDatabaseBackupNotifications 对齐）
 func (s *Service) sendBackupNotification(backup *schema.Backup, backupType, errMsg string) {
 	if s.notifier == nil {
@@ -1018,18 +1037,21 @@ func (s *Service) sendBackupNotification(backup *schema.Backup, backupType, errM
 		dbType = "mongodb"
 	}
 
+	// 与 TS v0.28.7 对齐：截断错误消息到 1010 字符，防止 Discord 等通知超长
+	truncatedErr := truncateMsg(errMsg, 1010)
+
 	title := "Database Backup Successful"
 	message := fmt.Sprintf("Database backup for %s completed successfully", appName)
 	if backupType == "error" {
 		title = "Database Backup Failed"
-		message = fmt.Sprintf("Database backup for %s failed: %s", appName, errMsg)
+		message = fmt.Sprintf("Database backup for %s failed: %s", appName, truncatedErr)
 	}
 
 	htmlBody, err := email.RenderDatabaseBackup(email.DatabaseBackupData{
 		ApplicationName: appName,
 		DatabaseType:    dbType,
 		Type:            backupType,
-		ErrorMessage:    errMsg,
+		ErrorMessage:    truncatedErr,
 	})
 	if err != nil {
 		log.Printf("Failed to render backup email: %v", err)
@@ -1179,18 +1201,21 @@ func (s *Service) sendVolumeBackupNotification(vb *schema.VolumeBackup, backupTy
 
 	appName := getVolumeServiceAppName(vb)
 
+	// 与 TS v0.28.7 对齐：截断错误消息到 1010 字符
+	truncatedErr := truncateMsg(errMsg, 1010)
+
 	title := "Volume Backup Successful"
 	message := fmt.Sprintf("Volume backup for %s completed successfully", appName)
 	if backupType == "error" {
 		title = "Volume Backup Failed"
-		message = fmt.Sprintf("Volume backup for %s failed: %s", appName, errMsg)
+		message = fmt.Sprintf("Volume backup for %s failed: %s", appName, truncatedErr)
 	}
 
 	htmlBody, err := email.RenderVolumeBackup(email.VolumeBackupData{
 		ApplicationName: appName,
 		VolumeName:      vb.VolumeName,
 		Type:            backupType,
-		ErrorMessage:    errMsg,
+		ErrorMessage:    truncatedErr,
 	})
 	if err != nil {
 		log.Printf("Failed to render volume backup email: %v", err)

@@ -100,7 +100,7 @@ func (h *Handler) GithubWebhook(c echo.Context) error {
 		}
 
 		switch payload.Action {
-		case "opened", "synchronize", "reopened":
+		case "opened", "synchronize", "reopened", "labeled":
 			return h.handleGithubPR(c, payload.Repository.FullName, payload.PullRequest.Head.Ref, payload.Number,
 				fmt.Sprintf("%d", payload.PullRequest.ID), payload.PullRequest.Title, payload.PullRequest.HTMLURL)
 		case "closed":

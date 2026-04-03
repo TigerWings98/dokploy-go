@@ -99,7 +99,7 @@ func (a *Auth) ValidateAPIKey(key string) (*schema.User, error) {
 	}
 
 	var user schema.User
-	err = a.db.Where("id = ?", apiKey.UserID).First(&user).Error
+	err = a.db.Where("id = ?", apiKey.ReferenceID).First(&user).Error
 	if err != nil {
 		return nil, ErrUserNotFound
 	}

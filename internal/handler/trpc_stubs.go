@@ -292,6 +292,60 @@ func (h *Handler) registerStubsTRPC(r procedureRegistry) {
 			"isValidEnterpriseLicense": owner.User.EnableEnterpriseFeatures,
 		}, nil
 	}
+	// v0.28.6 Whitelabeling stubs（企业版功能）
+	r["whitelabeling.get"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		settings, _ := h.getOrCreateSettings()
+		if settings != nil {
+			return settings.WhitelabelingConfig, nil
+		}
+		return map[string]interface{}{}, nil
+	}
+	r["whitelabeling.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		var in struct {
+			WhitelabelingConfig map[string]interface{} `json:"whitelabelingConfig"`
+		}
+		json.Unmarshal(input, &in)
+		settings, _ := h.getOrCreateSettings()
+		if settings != nil {
+			h.DB.Model(settings).Update("whitelabelingConfig", schema.JSONField[any]{Data: in.WhitelabelingConfig})
+		}
+		return true, nil
+	}
+	r["whitelabeling.reset"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		settings, _ := h.getOrCreateSettings()
+		if settings != nil {
+			h.DB.Model(settings).Update("whitelabelingConfig", schema.JSONField[any]{Data: map[string]interface{}{}})
+		}
+		return true, nil
+	}
+	r["whitelabeling.getPublic"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		settings, _ := h.getOrCreateSettings()
+		if settings != nil {
+			return settings.WhitelabelingConfig, nil
+		}
+		return map[string]interface{}{}, nil
+	}
+
+	// v0.28.7 Custom Roles / Audit Logs stubs（企业版功能）
+	r["customRole.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return []interface{}{}, nil
+	}
+	r["customRole.create"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return true, nil
+	}
+	r["customRole.update"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return true, nil
+	}
+	r["customRole.delete"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return true, nil
+	}
+	r["customRole.getPresets"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return []interface{}{}, nil
+	}
+	r["auditLog.all"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		return []interface{}{}, nil
+	}
+
 	r["licenseKey.updateEnterpriseSettings"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		var in struct {
 			Enabled bool `json:"enabled"`

@@ -286,6 +286,15 @@ export const AddUserPermissions = ({ userId, role }: Props) => {
 						onSubmit={form.handleSubmit(onSubmit)}
 						className="grid  grid-cols-1 md:grid-cols-2  w-full gap-4"
 					>
+						{isCustomRole && (
+							<div className="md:col-span-2 rounded-lg border p-3 bg-muted/50 text-sm text-muted-foreground">
+								This user has a custom role assigned. Capabilities are defined
+								by the role. You can still manage which projects, environments,
+								and services they can access below.
+							</div>
+						)}
+						{!isCustomRole && (
+							<>
 						<FormField
 							control={form.control}
 							name="canCreateProjects"
@@ -506,6 +515,8 @@ export const AddUserPermissions = ({ userId, role }: Props) => {
 								</FormItem>
 							)}
 						/>
+							</>
+						)}
 						<FormField
 							control={form.control}
 							name="accessedProjects"

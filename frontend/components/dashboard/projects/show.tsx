@@ -49,7 +49,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { TimeBadge } from "@/components/ui/time-badge";
 import { api } from "@/utils/api";
 import { useDebounce } from "@/utils/hooks/use-debounce";
 import { HandleProject } from "./handle-project";
@@ -61,6 +60,7 @@ export const ShowProjects = () => {
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data, isPending } = api.project.all.useQuery();
 	const { data: auth } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
 	const { mutateAsync } = api.project.remove.useMutation();
 
 	const [searchQuery, setSearchQuery] = useState(
@@ -168,11 +168,6 @@ export const ShowProjects = () => {
 			<BreadcrumbSidebar
 				list={[{ name: "Projects", href: "/dashboard/projects" }]}
 			/>
-			{!isCloud && (
-				<div className="absolute top-4 right-4">
-					<TimeBadge />
-				</div>
-			)}
 			<div className="w-full">
 				<Card className="h-full bg-sidebar p-2.5 rounded-xl  ">
 					<div className="rounded-xl bg-background shadow-md ">
@@ -186,9 +181,7 @@ export const ShowProjects = () => {
 									Create and manage your projects
 								</CardDescription>
 							</CardHeader>
-							{(auth?.role === "owner" ||
-								auth?.role === "admin" ||
-								auth?.canCreateProjects) && (
+							{permissions?.project.create && (
 								<div className="">
 									<HandleProject />
 								</div>
@@ -361,8 +354,7 @@ export const ShowProjects = () => {
 																				<div
 																					onClick={(e) => e.stopPropagation()}
 																				>
-																					{(auth?.role === "owner" ||
-																						auth?.canDeleteProjects) && (
+																					{permissions?.project.delete && (
 																						<AlertDialog>
 																							<AlertDialogTrigger className="w-full">
 																								<DropdownMenuItem

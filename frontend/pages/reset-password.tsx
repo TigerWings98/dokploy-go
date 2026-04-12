@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
+import { useWhitelabelingPublic } from "@/utils/hooks/use-whitelabeling";
 
 const loginSchema = z
 	.object({
@@ -48,6 +49,7 @@ const loginSchema = z
 type Login = z.infer<typeof loginSchema>;
 
 export default function Home() {
+	const { config: whitelabeling } = useWhitelabelingPublic();
 	const [token, setToken] = useState<string | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -92,7 +94,14 @@ export default function Home() {
 			<div className="flex flex-col items-center gap-4 w-full">
 				<CardTitle className="text-2xl font-bold flex flex-row gap-2 items-center">
 					<Link href="/" className="flex flex-row items-center gap-2">
-						<Logo className="size-12" />
+						<Logo
+							className="size-12"
+							logoUrl={
+								whitelabeling?.loginLogoUrl ||
+								whitelabeling?.logoUrl ||
+								undefined
+							}
+						/>
 					</Link>
 					Reset Password
 				</CardTitle>

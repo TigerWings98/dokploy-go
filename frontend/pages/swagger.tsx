@@ -1,5 +1,6 @@
 import type { NextPage } from "next";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/router";
 import { api } from "@/utils/api";
 import "swagger-ui-react/swagger-ui.css";
 import { useEffect, useState } from "react";
@@ -7,8 +8,18 @@ import { useEffect, useState } from "react";
 const SwaggerUI = dynamic(() => import("swagger-ui-react"), { ssr: false });
 
 const Home: NextPage = () => {
+	const router = useRouter();
+	// 与 TS v0.28.7 对齐：使用 getPermissions 代替 canAccessToAPI
+	const { data: permissions, isPending } = api.user.getPermissions.useQuery();
 	const { data } = api.settings.getOpenApiDocument.useQuery();
 	const [spec, setSpec] = useState({});
+
+	useEffect(() => {
+		if (isPending) return;
+		if (!permissions?.api.read) {
+			router.replace("/");
+		}
+	}, [permissions, isPending, router]);
 
 	useEffect(() => {
 		if (data) {
@@ -29,6 +40,8 @@ const Home: NextPage = () => {
 			setSpec(newSpec);
 		}
 	}, [data]);
+
+	if (isPending || !permissions?.api.read) return null;
 
 	return (
 		<div className="h-screen bg-white">

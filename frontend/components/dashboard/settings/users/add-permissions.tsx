@@ -173,9 +173,11 @@ type AddPermissions = z.infer<typeof addPermissions>;
 
 interface Props {
 	userId: string;
+	role?: string;
 }
 
-export const AddUserPermissions = ({ userId }: Props) => {
+export const AddUserPermissions = ({ userId, role }: Props) => {
+	const isCustomRole = !!role && !["owner", "admin", "member"].includes(role);
 	const [isOpen, setIsOpen] = useState(false);
 	const { data: projects } = api.project.allForPermissions.useQuery(undefined, {
 		enabled: isOpen,

@@ -1,5 +1,6 @@
 import { Loader2 } from "lucide-react";
-import type { ReactElement } from "react";
+import { useRouter } from "next/router";
+import { useEffect, type ReactElement } from "react";
 import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
 import { ShowPaidMonitoring } from "@/components/dashboard/monitoring/paid/servers/show-paid-monitoring";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -12,12 +13,25 @@ const BASE_URL = "http://localhost:3001/metrics";
 const DEFAULT_TOKEN = "metrics";
 
 const Dashboard = () => {
+	const router = useRouter();
+	// 与 TS v0.28.7 对齐：使用 getPermissions 检查 monitoring.read 权限
+	const { data: permissions, isPending: permissionsPending } =
+		api.user.getPermissions.useQuery();
 	const [toggleMonitoring, _setToggleMonitoring] = useLocalStorage(
 		"monitoring-enabled",
 		false,
 	);
 
 	const { data: monitoring, isPending } = api.user.getMetricsToken.useQuery();
+
+	useEffect(() => {
+		if (permissionsPending) return;
+		if (!permissions?.monitoring.read) {
+			router.replace("/dashboard/projects");
+		}
+	}, [permissions, permissionsPending, router]);
+
+	if (permissionsPending || !permissions?.monitoring.read) return null;
 	return (
 		<div className="space-y-4 pb-10">
 			{/* <AlertBlock>

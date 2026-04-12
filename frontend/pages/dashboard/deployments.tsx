@@ -1,6 +1,6 @@
 import { Rocket } from "lucide-react";
 import { useRouter } from "next/router";
-import type { ReactElement } from "react";
+import { useEffect, type ReactElement } from "react";
 import { ShowDeploymentsTable } from "@/components/dashboard/deployments/show-deployments-table";
 import { ShowQueueTable } from "@/components/dashboard/deployments/show-queue-table";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -11,6 +11,7 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { api } from "@/utils/api";
 
 const TAB_VALUES = ["deployments", "queue"] as const;
 type TabValue = (typeof TAB_VALUES)[number];
@@ -21,10 +22,22 @@ function isValidTab(t: string): t is TabValue {
 
 function DeploymentsPage() {
 	const router = useRouter();
+	// 与 TS v0.28.7 对齐：使用 getPermissions 检查 deployment.read 权限
+	const { data: permissions, isPending } = api.user.getPermissions.useQuery();
+
+	useEffect(() => {
+		if (isPending) return;
+		if (!permissions?.deployment.read) {
+			router.replace("/dashboard/projects");
+		}
+	}, [permissions, isPending, router]);
+
 	const tab =
 		router.query.tab && isValidTab(router.query.tab as string)
 			? (router.query.tab as TabValue)
 			: "deployments";
+
+	if (isPending || !permissions?.deployment.read) return null;
 
 	const setTab = (value: string) => {
 		if (!isValidTab(value)) return;

@@ -99,6 +99,21 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		return result, nil
 	}
 
+	// 与 TS v0.28.7 对齐：按 resource/action 返回当前用户的完整权限 map
+	// 前端用 api.user.getPermissions.useQuery() 获取后统一检查 canXxx
+	r["user.getPermissions"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		member, err := h.getDefaultMember(c)
+		if err != nil {
+			return nil, err
+		}
+		return buildResolvedPermissions(member), nil
+	}
+
+	r["user.haveRootAccess"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
+		// self-hosted 始终返回 false（仅 Cloud 判断 USER_ADMIN_ID）
+		return false, nil
+	}
+
 	r["user.getInvitations"] = func(c echo.Context, input json.RawMessage) (interface{}, error) {
 		user := mw.GetUser(c)
 		if user == nil {
@@ -497,4 +512,130 @@ func (h *Handler) registerUserTRPC(r procedureRegistry) {
 		h.DB.Where("user_id = ?", user.ID).Find(&members)
 		return len(members) > 0, nil
 	}
+}
+
+// buildResolvedPermissions 根据 member 角色和 legacy 权限位构建 ResolvedPermissions
+// 与 TS v0.28.7 resolvePermissions 对齐：
+// - owner/admin：所有 free 资源 + 所有 enterprise 资源均 true（self-hosted 默认授权）
+// - member：free 资源根据 legacy can* 位，enterprise 资源默认 false（需自定义角色，企业版才可用）
+func buildResolvedPermissions(member *schema.Member) map[string]map[string]bool {
+	isPrivileged := member.Role == "owner" || member.Role == "admin"
+
+	// statements: resource -> []actions
+	statements := map[string][]string{
+		// better-auth organization plugin defaults
+		"organization": {"update", "delete"},
+		"member":       {"read", "create", "update", "delete"},
+		"invitation":   {"create", "cancel"},
+		"team":         {"create", "update", "delete"},
+		"ac":           {"create", "read", "update", "delete"},
+
+		// Dokploy core resources (free tier)
+		"project":      {"create", "delete"},
+		"service":      {"create", "read", "delete"},
+		"environment":  {"create", "read", "delete"},
+		"docker":       {"read"},
+		"sshKeys":      {"read", "create", "delete"},
+		"gitProviders": {"read", "create", "delete"},
+		"traefikFiles": {"read", "write"},
+		"api":          {"read"},
+
+		// Enterprise-only resources (custom roles only)
+		"volume":              {"read", "create", "delete"},
+		"deployment":          {"read", "create", "cancel"},
+		"envVars":             {"read", "write"},
+		"projectEnvVars":      {"read", "write"},
+		"environmentEnvVars":  {"read", "write"},
+		"server":              {"read", "create", "delete"},
+		"registry":            {"read", "create", "delete"},
+		"certificate":         {"read", "create", "delete"},
+		"backup":              {"read", "create", "update", "delete", "restore"},
+		"volumeBackup":        {"read", "create", "update", "delete", "restore"},
+		"schedule":            {"read", "create", "update", "delete"},
+		"domain":              {"read", "create", "delete"},
+		"destination":         {"read", "create", "delete"},
+		"notification":        {"read", "create", "update", "delete"},
+		"logs":                {"read"},
+		"monitoring":          {"read"},
+		"auditLog":            {"read"},
+	}
+
+	// enterpriseOnlyResources: 权限仅在自定义角色 + 企业许可下才有意义
+	enterpriseOnly := map[string]bool{
+		"volume": true, "deployment": true, "envVars": true,
+		"projectEnvVars": true, "environmentEnvVars": true,
+		"server": true, "registry": true, "certificate": true,
+		"backup": true, "volumeBackup": true, "schedule": true,
+		"domain": true, "destination": true, "notification": true,
+		"logs": true, "monitoring": true, "auditLog": true,
+	}
+
+	// legacy overrides: 基于 member 表的 can* 字段（仅对 role=member 生效）
+	isMember := member.Role == "member"
+	legacyOverrides := map[string]map[string]bool{}
+	if isMember {
+		legacyOverrides = map[string]map[string]bool{
+			"project": {
+				"create": member.CanCreateProjects,
+				"delete": member.CanDeleteProjects,
+			},
+			"service": {
+				"create": member.CanCreateServices,
+				"delete": member.CanDeleteServices,
+			},
+			"environment": {
+				"create": member.CanCreateEnvironments,
+				"delete": member.CanDeleteEnvironments,
+			},
+			"traefikFiles": {
+				"read": member.CanAccessToTraefikFiles,
+			},
+			"docker": {
+				"read": member.CanAccessToDocker,
+			},
+			"api": {
+				"read": member.CanAccessToAPI,
+			},
+			"sshKeys": {
+				"read": member.CanAccessToSSHKeys,
+			},
+			"gitProviders": {
+				"read": member.CanAccessToGitProviders,
+			},
+		}
+	}
+
+	// 针对 admin/owner 的 free 资源默认全允许
+	privilegedFreeResources := map[string]bool{
+		"project": true, "service": true, "environment": true,
+		"docker": true, "sshKeys": true, "gitProviders": true,
+		"traefikFiles": true, "api": true,
+		"organization": true, "member": true, "invitation": true,
+		"team": true, "ac": true,
+	}
+
+	result := map[string]map[string]bool{}
+	for resource, actions := range statements {
+		rperm := map[string]bool{}
+		for _, action := range actions {
+			allow := false
+			if isPrivileged {
+				// owner/admin：企业资源 + free 资源均允许
+				if enterpriseOnly[resource] || privilegedFreeResources[resource] {
+					allow = true
+				}
+			}
+			// legacy override for member role
+			if !allow && isMember {
+				if rMap, ok := legacyOverrides[resource]; ok {
+					if v, ok := rMap[action]; ok && v {
+						allow = true
+					}
+				}
+			}
+			rperm[action] = allow
+		}
+		result[resource] = rperm
+	}
+	return result
 }

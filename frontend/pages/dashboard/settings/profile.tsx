@@ -6,7 +6,7 @@ import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { api } from "@/utils/api";
 
 const Page = () => {
-	const { data } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 
 	return (
@@ -14,9 +14,7 @@ const Page = () => {
 			<div className="h-full rounded-xl max-w-5xl mx-auto flex flex-col gap-4">
 				<ProfileForm />
 				{isCloud && <LinkingAccount />}
-				{(data?.canAccessToAPI ||
-					data?.role === "owner" ||
-					data?.role === "admin") && <ShowApiKeys />}
+				{permissions?.api.read && <ShowApiKeys />}
 			</div>
 		</div>
 	);

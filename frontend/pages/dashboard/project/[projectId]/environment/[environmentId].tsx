@@ -91,6 +91,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
+import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
 
 export type Services = {
 	serverId?: string | null;
@@ -263,6 +264,7 @@ const EnvironmentPage = () => {
 	const utils = api.useUtils();
 	const [isBulkActionLoading, setIsBulkActionLoading] = useState(false);
 	const { data: auth } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
 
 	const { data: environments } = api.environment.byProjectId.useQuery({
 		projectId: projectId,
@@ -362,6 +364,8 @@ const EnvironmentPage = () => {
 			{ projectId: selectedTargetProject },
 			{ enabled: !!selectedTargetProject },
 		);
+	const { config: whitelabeling } = useWhitelabeling();
+	const appName = whitelabeling?.appName || "Dokploy";
 
 	const emptyServices =
 		!currentEnvironment ||
@@ -863,7 +867,8 @@ const EnvironmentPage = () => {
 			/>
 			<Head>
 				<title>
-					Environment: {currentEnvironment.name} | {projectData?.name} | Dokploy
+					Environment: {currentEnvironment.name} | {projectData?.name} |{" "}
+				{appName}
 				</title>
 			</Head>
 			<div className="w-full">
@@ -893,9 +898,7 @@ const EnvironmentPage = () => {
 									<ProjectEnvironment projectId={projectId}>
 										<Button variant="outline">Project Environment</Button>
 									</ProjectEnvironment>
-									{(auth?.role === "owner" ||
-										auth?.role === "admin" ||
-										auth?.canCreateServices) && (
+									{permissions?.service.create && (
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
 												<Button>
@@ -1017,9 +1020,7 @@ const EnvironmentPage = () => {
 														Stop
 													</Button>
 												</DialogAction>
-												{(auth?.role === "owner" ||
-													auth?.role === "admin" ||
-													auth?.canDeleteServices) && (
+												{permissions?.service.delete && (
 													<>
 														<DialogAction
 															title="Delete Services"

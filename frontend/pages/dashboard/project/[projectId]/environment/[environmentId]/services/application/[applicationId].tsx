@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/tooltip";
 import { UseKeyboardNav } from "@/hooks/use-keyboard-nav";
 import { api } from "@/utils/api";
+import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
 
 type TabState =
 	| "projects"
@@ -81,10 +82,13 @@ const Service = () => {
 
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: auth } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
 
 	const { data: environments } = api.environment.byProjectId.useQuery({
 		projectId: data?.environment?.project?.projectId || "",
 	});
+	const { config: whitelabeling } = useWhitelabeling();
+	const appName = whitelabeling?.appName || "Dokploy";
 	const environmentDropdownItems =
 		environments?.map((env) => ({
 			name: env.name,
@@ -112,7 +116,8 @@ const Service = () => {
 			/>
 			<Head>
 				<title>
-					Application: {data?.name} - {data?.environment.project.name} | Dokploy
+					Application: {data?.name} - {data?.environment.project.name} |{" "}
+					{appName}
 				</title>
 			</Head>
 			<div className="w-full">
@@ -183,10 +188,10 @@ const Service = () => {
 								</div>
 
 								<div className="flex flex-row gap-2 justify-end">
-									<UpdateApplication applicationId={applicationId} />
-									{(auth?.role === "owner" ||
-										auth?.role === "admin" ||
-										auth?.canDeleteServices) && (
+									{permissions?.service.create && (
+										<UpdateApplication applicationId={applicationId} />
+									)}
+									{permissions?.service.delete && (
 										<DeleteService id={applicationId} type="application" />
 									)}
 								</div>
@@ -228,24 +233,47 @@ const Service = () => {
 									<div className="flex flex-row items-center justify-between w-full overflow-auto">
 										<TabsList className="flex gap-8 max-md:gap-4 justify-start">
 											<TabsTrigger value="general">General</TabsTrigger>
-											<TabsTrigger value="environment">Environment</TabsTrigger>
-											<TabsTrigger value="domains">Domains</TabsTrigger>
-											<TabsTrigger value="deployments">Deployments</TabsTrigger>
-											<TabsTrigger value="preview-deployments">
-												Preview Deployments
-											</TabsTrigger>
-											<TabsTrigger value="schedules">Schedules</TabsTrigger>
-											<TabsTrigger value="volume-backups">
-												Volume Backups
-											</TabsTrigger>
-											<TabsTrigger value="logs">Logs</TabsTrigger>
+											{permissions?.envVars.read && (
+												<TabsTrigger value="environment">
+													Environment
+												</TabsTrigger>
+											)}
+											{permissions?.domain.read && (
+												<TabsTrigger value="domains">Domains</TabsTrigger>
+											)}
+											{permissions?.deployment.read && (
+												<TabsTrigger value="deployments">
+													Deployments
+												</TabsTrigger>
+											)}
+											{permissions?.deployment.read && (
+												<TabsTrigger value="preview-deployments">
+													Preview Deployments
+												</TabsTrigger>
+											)}
+											{permissions?.schedule.read && (
+												<TabsTrigger value="schedules">Schedules</TabsTrigger>
+											)}
+											{permissions?.volumeBackup.read && (
+												<TabsTrigger value="volume-backups">
+													Volume Backups
+												</TabsTrigger>
+											)}
+											{permissions?.logs.read && (
+												<TabsTrigger value="logs">Logs</TabsTrigger>
+											)}
 											{data?.sourceType !== "docker" && (
 												<TabsTrigger value="patches">Patches</TabsTrigger>
 											)}
-											{((data?.serverId && isCloud) || !data?.server) && (
-												<TabsTrigger value="monitoring">Monitoring</TabsTrigger>
+											{permissions?.monitoring.read &&
+												((data?.serverId && isCloud) || !data?.server) && (
+													<TabsTrigger value="monitoring">
+														Monitoring
+													</TabsTrigger>
+												)}
+											{permissions?.service.create && (
+												<TabsTrigger value="advanced">Advanced</TabsTrigger>
 											)}
-											<TabsTrigger value="advanced">Advanced</TabsTrigger>
 										</TabsList>
 									</div>
 
@@ -254,12 +282,15 @@ const Service = () => {
 											<ShowGeneralApplication applicationId={applicationId} />
 										</div>
 									</TabsContent>
-									<TabsContent value="environment">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowEnvironment applicationId={applicationId} />
-										</div>
-									</TabsContent>
+									{permissions?.envVars.read && (
+										<TabsContent value="environment">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowEnvironment applicationId={applicationId} />
+											</div>
+										</TabsContent>
+									)}
 
+									{permissions?.monitoring.read && (
 									<TabsContent value="monitoring">
 										<div className="pt-2.5">
 											<div className="flex flex-col gap-4 border rounded-lg p-6">
@@ -307,73 +338,91 @@ const Service = () => {
 											</div>
 										</div>
 									</TabsContent>
+									)}
 
-									<TabsContent value="logs">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowDockerLogs
-												appName={data?.appName || ""}
-												serverId={data?.serverId || ""}
-											/>
-										</div>
-									</TabsContent>
-									<TabsContent value="schedules">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowSchedules
-												id={applicationId}
-												scheduleType="application"
-											/>
-										</div>
-									</TabsContent>
-									<TabsContent value="deployments" className="w-full pt-2.5">
-										<div className="flex flex-col gap-4 border rounded-lg">
-											<ShowDeployments
-												id={applicationId}
-												type="application"
-												serverId={data?.serverId || ""}
-												refreshToken={data?.refreshToken || ""}
-											/>
-										</div>
-									</TabsContent>
-									<TabsContent value="volume-backups" className="w-full pt-2.5">
-										<div className="flex flex-col gap-4 border rounded-lg">
-											<ShowVolumeBackups
-												id={applicationId}
-												type="application"
-												serverId={data?.serverId || ""}
-											/>
-										</div>
-									</TabsContent>
-									<TabsContent value="preview-deployments" className="w-full">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowPreviewDeployments applicationId={applicationId} />
-										</div>
-									</TabsContent>
-									<TabsContent value="domains" className="w-full">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowDomains id={applicationId} type="application" />
-										</div>
-									</TabsContent>
+									{permissions?.logs.read && (
+										<TabsContent value="logs">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowDockerLogs
+													appName={data?.appName || ""}
+													serverId={data?.serverId || ""}
+												/>
+											</div>
+										</TabsContent>
+									)}
+									{permissions?.schedule.read && (
+										<TabsContent value="schedules">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowSchedules
+													id={applicationId}
+													scheduleType="application"
+												/>
+											</div>
+										</TabsContent>
+									)}
+									{permissions?.deployment.read && (
+										<TabsContent value="deployments" className="w-full pt-2.5">
+											<div className="flex flex-col gap-4 border rounded-lg">
+												<ShowDeployments
+													id={applicationId}
+													type="application"
+													serverId={data?.serverId || ""}
+													refreshToken={data?.refreshToken || ""}
+												/>
+											</div>
+										</TabsContent>
+									)}
+									{permissions?.volumeBackup.read && (
+										<TabsContent
+											value="volume-backups"
+											className="w-full pt-2.5"
+										>
+											<div className="flex flex-col gap-4 border rounded-lg">
+												<ShowVolumeBackups
+													id={applicationId}
+													type="application"
+													serverId={data?.serverId || ""}
+												/>
+											</div>
+										</TabsContent>
+									)}
+									{permissions?.deployment.read && (
+										<TabsContent value="preview-deployments" className="w-full">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowPreviewDeployments applicationId={applicationId} />
+											</div>
+										</TabsContent>
+									)}
+									{permissions?.domain.read && (
+										<TabsContent value="domains" className="w-full">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowDomains id={applicationId} type="application" />
+											</div>
+										</TabsContent>
+									)}
 									<TabsContent value="patches" className="w-full">
 										<div className="flex flex-col gap-4 pt-2.5">
 											<ShowPatches id={applicationId} type="application" />
 										</div>
 									</TabsContent>
-									<TabsContent value="advanced">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<AddCommand applicationId={applicationId} />
-											<ShowClusterSettings
-												id={applicationId}
-												type="application"
-											/>
-											<ShowBuildServer applicationId={applicationId} />
-											<ShowResources id={applicationId} type="application" />
-											<ShowVolumes id={applicationId} type="application" />
-											<ShowRedirects applicationId={applicationId} />
-											<ShowSecurity applicationId={applicationId} />
-											<ShowPorts applicationId={applicationId} />
-											<ShowTraefikConfig applicationId={applicationId} />
-										</div>
-									</TabsContent>
+									{permissions?.service.create && (
+										<TabsContent value="advanced">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<AddCommand applicationId={applicationId} />
+												<ShowClusterSettings
+													id={applicationId}
+													type="application"
+												/>
+												<ShowBuildServer applicationId={applicationId} />
+												<ShowResources id={applicationId} type="application" />
+												<ShowVolumes id={applicationId} type="application" />
+												<ShowRedirects applicationId={applicationId} />
+												<ShowSecurity applicationId={applicationId} />
+												<ShowPorts applicationId={applicationId} />
+												<ShowTraefikConfig applicationId={applicationId} />
+											</div>
+										</TabsContent>
+									)}
 								</Tabs>
 							)}
 						</CardContent>

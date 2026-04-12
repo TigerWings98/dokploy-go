@@ -21,6 +21,8 @@ interface Props {
 }
 
 export const ShowGeneralMongo = ({ mongoId }: Props) => {
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canDeploy = permissions?.deployment.create ?? false;
 	const { data, refetch } = api.mongo.one.useQuery(
 		{
 			mongoId,
@@ -73,6 +75,7 @@ export const ShowGeneralMongo = ({ mongoId }: Props) => {
 					</CardHeader>
 					<CardContent className="flex flex-row gap-4 flex-wrap">
 						<TooltipProvider delayDuration={0}>
+							{canDeploy && (
 							<DialogAction
 								title="Deploy Mongo"
 								description="Are you sure you want to deploy this mongo?"
@@ -103,6 +106,8 @@ export const ShowGeneralMongo = ({ mongoId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
+							)}
+							{canDeploy && (
 							<DialogAction
 								title="Reload Mongo"
 								description="Are you sure you want to reload this mongo?"
@@ -141,7 +146,8 @@ export const ShowGeneralMongo = ({ mongoId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
-							{data?.applicationStatus === "idle" ? (
+							)}
+							{canDeploy && (data?.applicationStatus === "idle" ? (
 								<DialogAction
 									title="Start Mongo"
 									description="Are you sure you want to start this mongo?"
@@ -219,7 +225,7 @@ export const ShowGeneralMongo = ({ mongoId }: Props) => {
 										</Tooltip>
 									</Button>
 								</DialogAction>
-							)}
+							))}
 						</TooltipProvider>
 						<DockerTerminalModal
 							appName={data?.appName || ""}

@@ -21,6 +21,8 @@ interface Props {
 }
 
 export const ShowGeneralMysql = ({ mysqlId }: Props) => {
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canDeploy = permissions?.deployment.create ?? false;
 	const { data, refetch } = api.mysql.one.useQuery(
 		{
 			mysqlId,
@@ -71,6 +73,7 @@ export const ShowGeneralMysql = ({ mysqlId }: Props) => {
 					</CardHeader>
 					<CardContent className="flex flex-row gap-4 flex-wrap">
 						<TooltipProvider delayDuration={0}>
+							{canDeploy && (
 							<DialogAction
 								title="Deploy MySQL"
 								description="Are you sure you want to deploy this mysql?"
@@ -101,6 +104,8 @@ export const ShowGeneralMysql = ({ mysqlId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
+							)}
+							{canDeploy && (
 							<DialogAction
 								title="Reload MySQL"
 								description="Are you sure you want to reload this mysql?"
@@ -139,7 +144,8 @@ export const ShowGeneralMysql = ({ mysqlId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
-							{data?.applicationStatus === "idle" ? (
+							)}
+							{canDeploy && (data?.applicationStatus === "idle" ? (
 								<DialogAction
 									title="Start MySQL"
 									description="Are you sure you want to start this mysql?"
@@ -217,7 +223,7 @@ export const ShowGeneralMysql = ({ mysqlId }: Props) => {
 										</Tooltip>
 									</Button>
 								</DialogAction>
-							)}
+							))}
 						</TooltipProvider>
 						<DockerTerminalModal
 							appName={data?.appName || ""}

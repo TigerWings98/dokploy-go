@@ -21,6 +21,8 @@ interface Props {
 }
 
 export const ShowGeneralPostgres = ({ postgresId }: Props) => {
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canDeploy = permissions?.deployment.create ?? false;
 	const { data, refetch } = api.postgres.one.useQuery(
 		{
 			postgresId: postgresId,
@@ -73,6 +75,7 @@ export const ShowGeneralPostgres = ({ postgresId }: Props) => {
 					</CardHeader>
 					<CardContent className="flex flex-row gap-4 flex-wrap">
 						<TooltipProvider disableHoverableContent={false}>
+							{canDeploy && (
 							<DialogAction
 								title="Deploy PostgreSQL"
 								description="Are you sure you want to deploy this postgres?"
@@ -103,6 +106,8 @@ export const ShowGeneralPostgres = ({ postgresId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
+							)}
+							{canDeploy && (
 							<DialogAction
 								title="Reload PostgreSQL"
 								description="Are you sure you want to reload this postgres?"
@@ -141,7 +146,8 @@ export const ShowGeneralPostgres = ({ postgresId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
-							{data?.applicationStatus === "idle" ? (
+							)}
+							{canDeploy && (data?.applicationStatus === "idle" ? (
 								<DialogAction
 									title="Start PostgreSQL"
 									description="Are you sure you want to start this postgres?"
@@ -219,7 +225,7 @@ export const ShowGeneralPostgres = ({ postgresId }: Props) => {
 										</Tooltip>
 									</Button>
 								</DialogAction>
-							)}
+							))}
 						</TooltipProvider>
 						<DockerTerminalModal
 							appName={data?.appName || ""}

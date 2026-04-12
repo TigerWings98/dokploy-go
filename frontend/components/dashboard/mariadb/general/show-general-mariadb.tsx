@@ -21,6 +21,8 @@ interface Props {
 }
 
 export const ShowGeneralMariadb = ({ mariadbId }: Props) => {
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canDeploy = permissions?.deployment.create ?? false;
 	const { data, refetch } = api.mariadb.one.useQuery(
 		{
 			mariadbId,
@@ -72,6 +74,7 @@ export const ShowGeneralMariadb = ({ mariadbId }: Props) => {
 						<CardTitle className="text-xl">Deploy Settings</CardTitle>
 					</CardHeader>
 					<CardContent className="flex flex-row gap-4 flex-wrap">
+						{canDeploy && (
 						<TooltipProvider delayDuration={0}>
 							<DialogAction
 								title="Deploy Mariadb"
@@ -104,6 +107,8 @@ export const ShowGeneralMariadb = ({ mariadbId }: Props) => {
 								</Button>
 							</DialogAction>
 						</TooltipProvider>
+						)}
+						{canDeploy && (
 						<TooltipProvider delayDuration={0}>
 							<DialogAction
 								title="Reload Mariadb"
@@ -144,7 +149,8 @@ export const ShowGeneralMariadb = ({ mariadbId }: Props) => {
 								</Button>
 							</DialogAction>
 						</TooltipProvider>
-						{data?.applicationStatus === "idle" ? (
+						)}
+						{canDeploy && (data?.applicationStatus === "idle" ? (
 							<TooltipProvider delayDuration={0}>
 								<DialogAction
 									title="Start Mariadb"
@@ -226,7 +232,7 @@ export const ShowGeneralMariadb = ({ mariadbId }: Props) => {
 									</Button>
 								</DialogAction>
 							</TooltipProvider>
-						)}
+						))}
 						<DockerTerminalModal
 							appName={data?.appName || ""}
 							serverId={data?.serverId || ""}

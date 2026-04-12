@@ -21,6 +21,8 @@ interface Props {
 }
 
 export const ShowGeneralRedis = ({ redisId }: Props) => {
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canDeploy = permissions?.deployment.create ?? false;
 	const { data, refetch } = api.redis.one.useQuery(
 		{
 			redisId,
@@ -72,6 +74,7 @@ export const ShowGeneralRedis = ({ redisId }: Props) => {
 					</CardHeader>
 					<CardContent className="flex flex-row gap-4 flex-wrap">
 						<TooltipProvider delayDuration={0}>
+							{canDeploy && (
 							<DialogAction
 								title="Deploy Redis"
 								description="Are you sure you want to deploy this redis?"
@@ -102,6 +105,8 @@ export const ShowGeneralRedis = ({ redisId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
+							)}
+							{canDeploy && (
 							<DialogAction
 								title="Reload Redis"
 								description="Are you sure you want to reload this redis?"
@@ -140,7 +145,8 @@ export const ShowGeneralRedis = ({ redisId }: Props) => {
 									</Tooltip>
 								</Button>
 							</DialogAction>
-							{data?.applicationStatus === "idle" ? (
+							)}
+							{canDeploy && (data?.applicationStatus === "idle" ? (
 								<DialogAction
 									title="Start Redis"
 									description="Are you sure you want to start this redis?"
@@ -218,7 +224,7 @@ export const ShowGeneralRedis = ({ redisId }: Props) => {
 										</Tooltip>
 									</Button>
 								</DialogAction>
-							)}
+							))}
 						</TooltipProvider>
 						<DockerTerminalModal
 							appName={data?.appName || ""}
